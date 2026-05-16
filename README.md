@@ -88,8 +88,8 @@ https://colab.research.google.com/github/PailletJuanPablo/expandiffusion/blob/ma
 Colab pauses once for an optional Hugging Face token. Paste it if you need gated
 models such as FLUX, or press Enter to skip. The notebook then clones the repo,
 installs dependencies, starts the API and Vite servers, checks `/api/health`,
-validates the Colab proxy, prints the temporary web UI URL, and leaves the app
-running.
+checks the local web UI, prints the temporary Colab API/UI URLs, and leaves the
+app running.
 
 That UI URL is valid only while the Colab notebook runtime is active. For gated
 Hugging Face models, the notebook asks for `HF_TOKEN` in a hidden prompt.
