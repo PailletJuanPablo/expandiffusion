@@ -14,7 +14,7 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 
-from PIL import Image, ImageChops
+from PIL import Image
 
 from .. import constants
 from ..errors import AppError, GenerationCancelled
@@ -540,7 +540,7 @@ class Sd15Img2ImgAdapter(DiffusersImg2ImgAdapter):
     default_model_id = constants.MODEL_SD15
     pipeline_class_name = "StableDiffusionImg2ImgPipeline"
     capabilities = AdapterCapabilities(
-        inpaint=True,
+        inpaint=False,
         outpaint=True,
         img2img=True,
         txt2img=False,
@@ -1190,6 +1190,11 @@ class SdxlFillControlNetUnionAdapter(ModelAdapter):
             or config.controlnet_model_id
             or constants.MODEL_SDXL_FILL_CONTROLNET_UNION_CONTROLNET
         )
+        if (
+            not config.controlnet_local_path
+            and controlnet_source != constants.MODEL_SDXL_FILL_CONTROLNET_UNION_CONTROLNET
+        ):
+            controlnet_source = constants.MODEL_SDXL_FILL_CONTROLNET_UNION_CONTROLNET
         source = config.local_path or config.model_id or self.default_model_id
         pipeline = None
         try:
@@ -1297,18 +1302,7 @@ class SdxlFillControlNetUnionAdapter(ModelAdapter):
             if repaint_mode
             else context.source.convert("RGB")
         )
-        extra_control_images: dict[int, Image.Image] = {}
         control_modes = [7] if repaint_mode else [6]
-        if repaint_mode and context.conditioning_image is not None:
-            scribble = _scribble_control_image(
-                context.conditioning_image,
-                context.source,
-                context.mask,
-            )
-            if scribble is not None:
-                extra_control_images[2] = scribble
-                control_modes.append(2)
-                _save_adapter_image(context.metadata, "adapter_scribble_input.png", scribble)
         _save_adapter_image(context.metadata, "adapter_controlnet_input.png", source)
         _save_adapter_image(context.metadata, "adapter_mask_input.png", context.mask.convert("L"))
         _save_adapter_json(
@@ -1326,7 +1320,6 @@ class SdxlFillControlNetUnionAdapter(ModelAdapter):
                 "result_mode": parameters.result_mode,
                 "control_mode": 7 if repaint_mode else 6,
                 "control_modes": control_modes,
-                "uses_controlnet_scribble": 2 in control_modes,
                 "hf_space_overlap_percentage": parameters.model_extra.get(
                     "hf_space_overlap_percentage",
                     10,
@@ -1335,7 +1328,7 @@ class SdxlFillControlNetUnionAdapter(ModelAdapter):
                 else 10,
             },
         )
-        final_prompt = f"{parameters.prompt} , high quality, 4k"
+        final_prompt = parameters.prompt
         try:
             (
                 prompt_embeds,
@@ -1360,7 +1353,6 @@ class SdxlFillControlNetUnionAdapter(ModelAdapter):
                         guidance_scale=parameters.guidance_scale,
                         controlnet_conditioning_scale=parameters.controlnet_conditioning_scale,
                         control_mode=7 if repaint_mode else 6,
-                        extra_control_images=extra_control_images or None,
                     )
                 ):
                     if context.is_cancelled():
@@ -2215,26 +2207,6 @@ def _repaint_control_image(source: Image.Image, mask: Image.Image) -> Image.Imag
     )
     black = Image.new("RGB", source_rgb.size, (0, 0, 0))
     return Image.composite(black, source_rgb, mask_binary)
-
-
-def _scribble_control_image(
-    conditioning: Image.Image,
-    source: Image.Image,
-    mask: Image.Image,
-) -> Image.Image | None:
-    source_rgb = source.convert("RGB")
-    conditioning_rgb = conditioning.convert("RGB").resize(source_rgb.size, Image.Resampling.LANCZOS)
-    diff = ImageChops.difference(conditioning_rgb, source_rgb).convert("L")
-    stroke_mask = diff.point(lambda pixel: 255 if pixel > 12 else 0)
-    generation_mask = mask.convert("L").point(
-        lambda pixel: 255 if pixel >= constants.WHITE_MASK_THRESHOLD else 0
-    )
-    stroke_mask = ImageChops.multiply(stroke_mask, generation_mask)
-    if stroke_mask.getbbox() is None:
-        return None
-    scribble = Image.new("RGB", source_rgb.size, (0, 0, 0))
-    scribble.paste((255, 255, 255), (0, 0), stroke_mask)
-    return scribble
 
 
 def _release_pipeline(pipeline: Any) -> None:

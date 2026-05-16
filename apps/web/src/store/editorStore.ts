@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import {
-  ADAPTER_SDXL_INPAINT,
+  ADAPTER_SDXL_FILL_IP_REFINE,
   DIRECTIONAL_OUTPAINT_DEFAULT_CONTEXT_SIZE,
   DIRECTIONAL_OUTPAINT_DEFAULT_CROSS_SIZE,
   DIRECTIONAL_OUTPAINT_DEFAULT_GENERATED_SIZE,
@@ -17,7 +17,7 @@ import {
   DEFAULT_SELECTION_SIZE,
   DEFAULT_ZOOM,
   FILL_EDGE_EXTEND,
-  FILL_OPENCV_NS,
+  FILL_TRANSPARENT,
   GENERATION_MODE_INPAINT,
   GENERATION_MODE_OUTPAINT,
   INPAINT_AREA_WHOLE_SELECTION,
@@ -33,20 +33,25 @@ import {
   OUTPAINT_STRATEGY_LOCAL_CONTEXT,
   OUTPAINT_STRATEGY_SELECTED_FRAME,
   OUTPAINT_STRATEGY_WHOLE_RESIZED,
+  RESULT_MODE_FEATHER_KNOWN,
   RESULT_MODE_GENERATED_SELECTION,
   RESULT_MODE_PRESERVE_KNOWN,
+  SCHEDULER_AUTO,
   SCHEDULER_DPM_SOLVER,
   STROKE_ERASE,
   STROKE_PAINT,
   TOOL_INPAINT_MASK,
   TOOL_OUTPAINT_FRAME,
   TOOL_SELECT,
+  WORKSPACE_MODE_EXPAND_IMAGE,
+  WORKSPACE_MODE_FREE_EDIT,
   type ControlGuideMaskMode,
   type EditorTool,
   type GenerationMode,
   type MaskStrokeMode,
   type OutpaintDirection,
   type OutpaintStrategy,
+  type WorkspaceMode,
 } from "../constants/domain";
 import type {
   CanvasSelectionTarget,
@@ -75,6 +80,7 @@ interface EditorStoreActions {
   setControlGuideColor: (color: string) => void;
   setControlGuideStrength: (strength: number) => void;
   setControlGuideMaskMode: (mode: ControlGuideMaskMode) => void;
+  setWorkspaceMode: (mode: WorkspaceMode) => void;
   setGenerationMode: (mode: GenerationMode) => void;
   setSelection: (selection: SelectionRect) => void;
   moveSelection: (x: number, y: number) => void;
@@ -152,6 +158,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   controlGuideColor: DEFAULT_CONTROL_GUIDE_COLOR,
   controlGuideStrength: DEFAULT_CONTROL_GUIDE_STRENGTH,
   controlGuideMaskMode: DEFAULT_CONTROL_GUIDE_MASK_MODE,
+  workspaceMode: WORKSPACE_MODE_FREE_EDIT,
   generationMode: GENERATION_MODE_OUTPAINT,
   selectedAdapterId: DEFAULT_ADAPTER_ID,
   modelSource: MODEL_SOURCE_HUB,
@@ -200,8 +207,34 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     set({ controlGuideStrength }),
   setControlGuideMaskMode: (controlGuideMaskMode) =>
     set({ controlGuideMaskMode }),
+  setWorkspaceMode: (workspaceMode) =>
+    set((state) => {
+      if (workspaceMode === WORKSPACE_MODE_EXPAND_IMAGE) {
+        return {
+          workspaceMode,
+          generationMode: GENERATION_MODE_OUTPAINT,
+          tool: TOOL_SELECT,
+          canvasSelectionTarget: { kind: "none" },
+          controlGuideEnabled: false,
+          pluginPreview: null,
+          parameters: applyExpandImagePreset(state.parameters),
+        };
+      }
+      if (state.workspaceMode === WORKSPACE_MODE_FREE_EDIT) {
+        return { workspaceMode };
+      }
+      return {
+        workspaceMode,
+        generationMode: GENERATION_MODE_OUTPAINT,
+        tool: TOOL_OUTPAINT_FRAME,
+        canvasSelectionTarget: { kind: "frame" },
+        pluginPreview: null,
+        parameters: applyFreeEditPreset(state.parameters),
+      };
+    }),
   setGenerationMode: (generationMode) =>
     set((state) => ({
+      workspaceMode: WORKSPACE_MODE_FREE_EDIT,
       generationMode,
       pluginPreview: null,
       canvasSelectionTarget:
@@ -213,10 +246,11 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
           ? TOOL_INPAINT_MASK
           : TOOL_OUTPAINT_FRAME,
       parameters:
-        generationMode === GENERATION_MODE_INPAINT &&
-        state.parameters.result_mode === RESULT_MODE_GENERATED_SELECTION
-          ? { ...state.parameters, result_mode: RESULT_MODE_PRESERVE_KNOWN }
-          : state.parameters,
+        generationMode === GENERATION_MODE_INPAINT
+          ? state.parameters.result_mode === RESULT_MODE_GENERATED_SELECTION
+            ? { ...state.parameters, result_mode: RESULT_MODE_PRESERVE_KNOWN }
+            : state.parameters
+          : applyFreeEditPreset(state.parameters),
     })),
   setSelection: (selection) =>
     commitDocument(set, get, (documentState) => ({
@@ -366,9 +400,9 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     })),
   applyDirectionalOutpaintPreset: () =>
     set((state) => ({
-      selectedAdapterId: ADAPTER_SDXL_INPAINT,
+      selectedAdapterId: ADAPTER_SDXL_FILL_IP_REFINE,
       controlGuideEnabled: false,
-      parameters: applyDirectionalOutpaintPreset(state.parameters),
+      parameters: applyExpandImagePreset(state.parameters),
     })),
   setSelectedAdapterId: (adapterId, defaultModelId, generationDefaults) =>
     set((state) => ({
@@ -568,24 +602,24 @@ function createInitialParameters(): GenerationParameters {
     negative_prompt: "",
     width: DEFAULT_CANVAS_WIDTH,
     height: DEFAULT_CANVAS_HEIGHT,
-    steps: 28,
-    guidance_scale: 7.5,
+    steps: 8,
+    guidance_scale: 1.5,
     strength: 1,
     seed: null,
     random_seed: true,
     sample_count: 1,
-    scheduler: SCHEDULER_DPM_SOLVER,
+    scheduler: SCHEDULER_AUTO,
     safety_checker: true,
     img2img: false,
-    fill_mode: FILL_OPENCV_NS,
+    fill_mode: FILL_TRANSPARENT,
     correction_pipeline: [],
     inpaint_area: INPAINT_AREA_WHOLE_SELECTION,
     mask_crop_padding: 32,
     mask_blur: 0,
     outpaint_max_width: 1536,
     outpaint_max_height: 1024,
-    result_mode: RESULT_MODE_GENERATED_SELECTION,
-    outpaint_strategy: OUTPAINT_STRATEGY_LOCAL_CONTEXT,
+    result_mode: RESULT_MODE_PRESERVE_KNOWN,
+    outpaint_strategy: OUTPAINT_STRATEGY_HF_SPACE_FILL,
     outpaint_direction: OUTPAINT_DIRECTION_RIGHT,
     outpaint_generated_size: DIRECTIONAL_OUTPAINT_DEFAULT_GENERATED_SIZE,
     outpaint_context_size: DIRECTIONAL_OUTPAINT_DEFAULT_CONTEXT_SIZE,
@@ -597,6 +631,18 @@ function createInitialParameters(): GenerationParameters {
     hf_space_overlap_bottom: true,
     hf_space_resize_option: "Full",
     hf_space_custom_resize_percentage: 50,
+    fixed_expand_percent: 50,
+    fixed_expand_width_percent: 50,
+    fixed_expand_height_percent: 50,
+    fixed_expand_output_scale: "balanced",
+    fixed_expand_custom_output_scale: 75,
+    fixed_expand_show_guides: true,
+    controlnet_conditioning_scale: 1.0,
+    visual_refine_enabled: false,
+    visual_refine_strength: 0.45,
+    ip_adapter_scale: 0.45,
+    visual_refine_steps: 12,
+    visual_refine_reference: "near_edge",
     loras: [],
     textual_inversions: [],
   };
@@ -694,20 +740,56 @@ function applyAdapterGenerationDefaults(
       defaults.hf_space_custom_resize_percentage,
       parameters.hf_space_custom_resize_percentage,
     ),
+    fixed_expand_percent: numberDefault(
+      defaults.fixed_expand_percent,
+      parameters.fixed_expand_percent,
+    ),
+    fixed_expand_width_percent: numberDefault(
+      defaults.fixed_expand_width_percent,
+      parameters.fixed_expand_width_percent,
+    ),
+    fixed_expand_height_percent: numberDefault(
+      defaults.fixed_expand_height_percent,
+      parameters.fixed_expand_height_percent,
+    ),
+    fixed_expand_output_scale: stringDefault(
+      defaults.fixed_expand_output_scale,
+      parameters.fixed_expand_output_scale,
+    ),
+    fixed_expand_custom_output_scale: numberDefault(
+      defaults.fixed_expand_custom_output_scale,
+      parameters.fixed_expand_custom_output_scale,
+    ),
+    fixed_expand_show_guides: booleanDefault(
+      defaults.fixed_expand_show_guides,
+      parameters.fixed_expand_show_guides,
+    ),
   };
   return applyPluginGenerationDefaults(baseDefaults, defaults);
 }
 
-function applyDirectionalOutpaintPreset(
+function applyExpandImagePreset(
   parameters: GenerationParameters,
 ): GenerationParameters {
   return {
     ...parameters,
-    outpaint_strategy: OUTPAINT_STRATEGY_DIRECTIONAL,
-    outpaint_direction: OUTPAINT_DIRECTION_RIGHT,
-    outpaint_generated_size: DIRECTIONAL_OUTPAINT_DEFAULT_GENERATED_SIZE,
-    outpaint_context_size: DIRECTIONAL_OUTPAINT_DEFAULT_CONTEXT_SIZE,
-    outpaint_cross_size: DIRECTIONAL_OUTPAINT_DEFAULT_CROSS_SIZE,
+    outpaint_strategy: OUTPAINT_STRATEGY_HF_SPACE_FILL,
+    outpaint_direction: parameters.outpaint_direction,
+    outpaint_generated_size:
+      parameters.outpaint_generated_size ||
+      DIRECTIONAL_OUTPAINT_DEFAULT_GENERATED_SIZE,
+    outpaint_context_size:
+      parameters.outpaint_context_size ||
+      DIRECTIONAL_OUTPAINT_DEFAULT_CONTEXT_SIZE,
+    outpaint_cross_size:
+      parameters.outpaint_cross_size || DIRECTIONAL_OUTPAINT_DEFAULT_CROSS_SIZE,
+    fixed_expand_percent: parameters.fixed_expand_percent || 50,
+    fixed_expand_width_percent: parameters.fixed_expand_width_percent || 50,
+    fixed_expand_height_percent: parameters.fixed_expand_height_percent || 50,
+    fixed_expand_output_scale: parameters.fixed_expand_output_scale || "balanced",
+    fixed_expand_custom_output_scale:
+      parameters.fixed_expand_custom_output_scale || 75,
+    fixed_expand_show_guides: parameters.fixed_expand_show_guides ?? true,
     strength: 1,
     fill_mode: FILL_EDGE_EXTEND,
     mask_blur: 0,
@@ -716,6 +798,22 @@ function applyDirectionalOutpaintPreset(
     sample_count: 1,
     random_seed: false,
     scheduler: SCHEDULER_DPM_SOLVER,
+  };
+}
+
+function applyFreeEditPreset(parameters: GenerationParameters): GenerationParameters {
+  if (
+    parameters.outpaint_strategy !== OUTPAINT_STRATEGY_DIRECTIONAL &&
+    parameters.outpaint_strategy !== OUTPAINT_STRATEGY_HF_SPACE_FILL
+  ) {
+    return parameters;
+  }
+  return {
+    ...parameters,
+    outpaint_strategy: OUTPAINT_STRATEGY_LOCAL_CONTEXT,
+    fill_mode: FILL_TRANSPARENT,
+    result_mode: RESULT_MODE_FEATHER_KNOWN,
+    random_seed: true,
   };
 }
 
@@ -782,6 +880,12 @@ const BASE_GENERATION_DEFAULT_KEYS = new Set([
   "hf_space_overlap_bottom",
   "hf_space_resize_option",
   "hf_space_custom_resize_percentage",
+  "fixed_expand_percent",
+  "fixed_expand_width_percent",
+  "fixed_expand_height_percent",
+  "fixed_expand_output_scale",
+  "fixed_expand_custom_output_scale",
+  "fixed_expand_show_guides",
   "loras",
   "textual_inversions",
 ]);

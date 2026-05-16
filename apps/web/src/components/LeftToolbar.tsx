@@ -17,22 +17,21 @@ import {
 } from "lucide-react";
 import {
   useRef,
-  useState,
   type CSSProperties,
   type ChangeEvent,
   type ReactNode,
 } from "react";
 import {
+  CONTROLNET_GUIDE_UI_ENABLED,
   GENERATION_MODE_OUTPAINT,
   GENERATION_MODE_INPAINT,
   TOOL_CONTROL_GUIDE,
   TOOL_ERASE,
-  TOOL_INPAINT_MASK,
-  TOOL_OUTPAINT_FRAME,
   TOOL_PAN,
   TOOL_SELECT,
   PLUGIN_TOOL_TARGET_FRAME,
   PLUGIN_TOOL_TARGET_IMAGE,
+  WORKSPACE_MODE_FREE_EDIT,
   pluginEditorToolId,
   pluginToolIdFromEditorTool,
   type EditorTool,
@@ -44,18 +43,22 @@ import {
   prepareRasterImport,
   readFileAsDataUrl,
 } from "../lib/canvasRender";
+import {
+  ONBOARDING_TARGET_TOOLBAR,
+  ONBOARDING_TARGET_UPLOAD_BUTTON,
+} from "../lib/onboardingTour";
 import { loadProjectArchive, saveProjectArchive } from "../lib/projectArchive";
 import { useEditorStore } from "../store/editorStore";
-import { PluginManagerDialog } from "./PluginManagerDialog";
 import { TooltipButton } from "./TooltipButton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 export function LeftToolbar() {
-  const [pluginsOpen, setPluginsOpen] = useState(false);
   const { pluginToolsQuery } = useStudioQueries();
   const tool = useEditorStore((state) => state.tool);
+  const generationMode = useEditorStore((state) => state.generationMode);
   const setTool = useEditorStore((state) => state.setTool);
   const setGenerationMode = useEditorStore((state) => state.setGenerationMode);
+  const setWorkspaceMode = useEditorStore((state) => state.setWorkspaceMode);
   const setCanvasSelectionTarget = useEditorStore(
     (state) => state.setCanvasSelectionTarget,
   );
@@ -121,7 +124,11 @@ export function LeftToolbar() {
 
   return (
     <>
-      <aside className="left-toolbar" aria-label="Editor tools">
+      <aside
+        className="left-toolbar"
+        aria-label="Editor tools"
+        data-tour-id={ONBOARDING_TARGET_TOOLBAR}
+      >
         <div className="toolbar-section" aria-label="Selection">
           {renderToolbarItem(
             <ToolbarTool
@@ -138,31 +145,39 @@ export function LeftToolbar() {
         <div className="toolbar-section" aria-label="Generation actions">
           {renderToolbarItem(
             <ToolbarAction
-              active={tool === TOOL_OUTPAINT_FRAME}
+              active={generationMode === GENERATION_MODE_OUTPAINT}
               label="Outpaint frame"
-              onSelect={() => setGenerationMode(GENERATION_MODE_OUTPAINT)}
+              onSelect={() => {
+                setWorkspaceMode(WORKSPACE_MODE_FREE_EDIT);
+                setGenerationMode(GENERATION_MODE_OUTPAINT);
+              }}
             >
               <Frame size={18} />
             </ToolbarAction>,
           )}
           {renderToolbarItem(
             <ToolbarAction
-              active={tool === TOOL_INPAINT_MASK}
+              active={generationMode === GENERATION_MODE_INPAINT}
               label="Inpaint mask"
-              onSelect={() => setGenerationMode(GENERATION_MODE_INPAINT)}
+              onSelect={() => {
+                setWorkspaceMode(WORKSPACE_MODE_FREE_EDIT);
+                setGenerationMode(GENERATION_MODE_INPAINT);
+              }}
             >
               <Paintbrush size={18} />
             </ToolbarAction>,
           )}
-          {renderToolbarItem(
-            <ToolbarAction
-              active={tool === TOOL_CONTROL_GUIDE}
-              label="Sketch guide"
-              onSelect={() => setTool(TOOL_CONTROL_GUIDE)}
-            >
-              <Palette size={18} />
-            </ToolbarAction>,
-          )}
+          {CONTROLNET_GUIDE_UI_ENABLED
+            ? renderToolbarItem(
+                <ToolbarAction
+                  active={tool === TOOL_CONTROL_GUIDE}
+                  label="Sketch guide"
+                  onSelect={() => setTool(TOOL_CONTROL_GUIDE)}
+                >
+                  <Palette size={18} />
+                </ToolbarAction>,
+              )
+            : null}
         </div>
         <div className="toolbar-divider" />
         <div className="toolbar-section" aria-label="Canvas tools">
@@ -194,6 +209,7 @@ export function LeftToolbar() {
               label="Add images"
               accept="image/*"
               multiple
+              dataTourId={ONBOARDING_TARGET_UPLOAD_BUTTON}
               onChange={handleRasterFile}
             >
               <Upload size={18} />
@@ -228,17 +244,6 @@ export function LeftToolbar() {
             </div>
           </>
         ) : null}
-        <div className="toolbar-section" aria-label="Modules">
-          {renderToolbarItem(
-            <TooltipButton
-              label="Plugins"
-              active={pluginsOpen}
-              onClick={() => setPluginsOpen(true)}
-            >
-              <Puzzle size={18} />
-            </TooltipButton>,
-          )}
-        </div>
         <div className="toolbar-spacer" />
         <div
           className="toolbar-section toolbar-section-secondary"
@@ -286,9 +291,6 @@ export function LeftToolbar() {
           )}
         </div>
       </aside>
-      {pluginsOpen ? (
-        <PluginManagerDialog onClose={() => setPluginsOpen(false)} />
-      ) : null}
     </>
   );
 }
@@ -323,6 +325,7 @@ interface ToolbarFileButtonProps {
   label: string;
   accept: string;
   multiple?: boolean;
+  dataTourId?: string;
   children: ReactNode;
   onChange: (event: ChangeEvent<HTMLInputElement>) => void;
 }
@@ -331,6 +334,7 @@ function ToolbarFileButton({
   label,
   accept,
   multiple = false,
+  dataTourId,
   children,
   onChange,
 }: ToolbarFileButtonProps) {
@@ -342,6 +346,7 @@ function ToolbarFileButton({
           type="button"
           className="icon-file-button"
           aria-label={label}
+          data-tour-id={dataTourId}
           onClick={() => inputRef.current?.click()}
         >
           {children}

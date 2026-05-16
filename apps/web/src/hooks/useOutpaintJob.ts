@@ -1,15 +1,21 @@
 import { useMutation } from '@tanstack/react-query'
 import {
+  CONTROLNET_GUIDE_UI_ENABLED,
+  FILL_TRANSPARENT,
   GENERATION_MODE_INPAINT,
   OUTPAINT_STRATEGY_DIRECTIONAL,
   OUTPAINT_STRATEGY_HF_SPACE_FILL,
+  OUTPAINT_STRATEGY_LOCAL_CONTEXT,
   RESULT_MODE_GENERATED_SELECTION,
+  RESULT_MODE_FEATHER_KNOWN,
   RESULT_MODE_PRESERVE_KNOWN,
   JOB_CANCELLED,
   JOB_FAILED,
   JOB_QUEUED,
   JOB_RUNNING,
   JOB_SUCCEEDED,
+  WORKSPACE_MODE_EXPAND_IMAGE,
+  WORKSPACE_MODE_FREE_EDIT,
 } from '../constants/domain'
 import {
   cancelJob,
@@ -21,8 +27,15 @@ import {
 import { composeSelectionResults, renderGenerationInputs } from '../lib/canvasRender'
 import { AppError } from '../lib/errors'
 import { parseLoras, parseTextualInversions } from '../lib/extensionParsers'
+import { isExpandImageAdapter } from '../lib/workspaceMode'
 import { useEditorStore } from '../store/editorStore'
-import type { AdapterInfo } from '../domain/types'
+import type { AdapterInfo, GenerationParameters } from '../domain/types'
+
+const CONTROL_GUIDE_DISABLED_ADAPTERS = new Set([
+  'sdxl-fill-controlnet-union',
+  'sdxl-fill-ip-refine',
+])
+const FREE_OUTPAINT_MIN_OVERLAP_PERCENTAGE = 20
 
 interface UseOutpaintJobOptions {
   selectedAdapter: AdapterInfo | undefined
@@ -47,6 +60,7 @@ export function useOutpaintJob({
   const selectedAdapterId = useEditorStore((state) => state.selectedAdapterId)
   const controlGuideEnabled = useEditorStore((state) => state.controlGuideEnabled)
   const controlGuideMaskMode = useEditorStore((state) => state.controlGuideMaskMode)
+  const workspaceMode = useEditorStore((state) => state.workspaceMode)
   const generationMode = useEditorStore((state) => state.generationMode)
   const parameters = useEditorStore((state) => state.parameters)
   const currentJob = useEditorStore((state) => state.currentJob)
@@ -65,10 +79,22 @@ export function useOutpaintJob({
       const hfSpaceFillActive =
         generationMode !== GENERATION_MODE_INPAINT &&
         parameters.outpaint_strategy === OUTPAINT_STRATEGY_HF_SPACE_FILL
-      const requestParameters = parametersForGenerationMode(parameters, generationMode)
+      const controlGuideAllowed =
+        CONTROLNET_GUIDE_UI_ENABLED &&
+        !CONTROL_GUIDE_DISABLED_ADAPTERS.has(selectedAdapterId)
+      const expandImageGenerationActive =
+        workspaceMode === WORKSPACE_MODE_EXPAND_IMAGE &&
+        isExpandImageAdapter(selectedAdapterId)
+      const requestParameters = parametersForGenerationMode(
+        parameters,
+        generationMode,
+        expandImageGenerationActive,
+        selectedAdapterId,
+      )
       const inputs = await renderGenerationInputs(documentState, generationMode, {
         includeControlGuide:
           controlGuideEnabled &&
+          controlGuideAllowed &&
           !directionalOutpaintActive &&
           !hfSpaceFillActive,
         controlGuideMaskMode,
@@ -80,9 +106,21 @@ export function useOutpaintJob({
         outpaintContextSize: requestParameters.outpaint_context_size,
         outpaintCrossSize: requestParameters.outpaint_cross_size,
         hfSpaceOverlapPercentage: requestParameters.hf_space_overlap_percentage,
+        hfSpaceFixedExpansion: expandImageGenerationActive,
+        hfSpaceResizeOption: requestParameters.hf_space_resize_option,
+        hfSpaceCustomResizePercentage: requestParameters.hf_space_custom_resize_percentage,
+        hfSpaceOverlapLeft: requestParameters.hf_space_overlap_left,
+        hfSpaceOverlapRight: requestParameters.hf_space_overlap_right,
+        hfSpaceOverlapTop: requestParameters.hf_space_overlap_top,
+        hfSpaceOverlapBottom: requestParameters.hf_space_overlap_bottom,
+        fixedExpandPercent: requestParameters.fixed_expand_percent,
+        fixedExpandWidthPercent: requestParameters.fixed_expand_width_percent,
+        fixedExpandHeightPercent: requestParameters.fixed_expand_height_percent,
+        fixedExpandOutputScalePercent: fixedExpandOutputScalePercent(requestParameters),
       })
       if (
         controlGuideEnabled &&
+        controlGuideAllowed &&
         !directionalOutpaintActive &&
         !hfSpaceFillActive &&
         !inputs.conditioning
@@ -102,8 +140,8 @@ export function useOutpaintJob({
         mode: generationMode,
         parameters: {
           ...requestParameters,
-          width: inputs.selection.width,
-          height: inputs.selection.height,
+          width: inputs.renderSize?.width ?? inputs.selection.width,
+          height: inputs.renderSize?.height ?? inputs.selection.height,
           loras: parseLoras(loraText),
           textual_inversions: parseTextualInversions(textualInversionText),
         },
@@ -112,6 +150,7 @@ export function useOutpaintJob({
           selection: inputs.selection,
           reference_count: documentState.references.length,
           generation_mode: generationMode,
+          workspace_mode: expandImageGenerationActive ? workspaceMode : WORKSPACE_MODE_FREE_EDIT,
           adapter_family: selectedAdapter?.family,
           directional_outpaint_plan: inputs.directionalPlan,
         },
@@ -153,7 +192,11 @@ export function useOutpaintJob({
                   selection,
                   result.images,
                   compositionMask,
-                  { replaceDocument, directionalPlan },
+                  {
+                    replaceDocument,
+                    directionalPlan,
+                    softCompositionMask: parameters.result_mode === RESULT_MODE_FEATHER_KNOWN,
+                  },
                 )
                 setPendingResults(composed.images, composed.bounds, replaceDocument)
                 setGenerationNote(formatPostprocessorDiagnostics(result.metadata))
@@ -211,10 +254,32 @@ export function useOutpaintJob({
   }
 }
 
+function fixedExpandOutputScalePercent(parameters: GenerationParameters): number {
+  if (parameters.fixed_expand_output_scale === 'safe') {
+    return 60
+  }
+  if (parameters.fixed_expand_output_scale === 'balanced') {
+    return 75
+  }
+  if (parameters.fixed_expand_output_scale === 'custom') {
+    return Math.max(25, Math.min(100, Math.round(parameters.fixed_expand_custom_output_scale)))
+  }
+  return 100
+}
+
 function parametersForGenerationMode(
   parameters: ReturnType<typeof useEditorStore.getState>['parameters'],
   generationMode: ReturnType<typeof useEditorStore.getState>['generationMode'],
-) {
+  expandImageGenerationActive: boolean,
+  selectedAdapterId: string,
+): GenerationParameters {
+  if (expandImageGenerationActive) {
+    return {
+      ...parameters,
+      outpaint_strategy: OUTPAINT_STRATEGY_HF_SPACE_FILL,
+      result_mode: RESULT_MODE_PRESERVE_KNOWN,
+    }
+  }
   if (
     generationMode === GENERATION_MODE_INPAINT &&
     parameters.result_mode === RESULT_MODE_GENERATED_SELECTION
@@ -223,10 +288,18 @@ function parametersForGenerationMode(
   }
   if (
     generationMode !== GENERATION_MODE_INPAINT &&
-    parameters.outpaint_strategy === OUTPAINT_STRATEGY_HF_SPACE_FILL &&
-    parameters.result_mode === RESULT_MODE_GENERATED_SELECTION
+    isExpandImageAdapter(selectedAdapterId)
   ) {
-    return { ...parameters, result_mode: RESULT_MODE_PRESERVE_KNOWN }
+    return {
+      ...parameters,
+      outpaint_strategy: OUTPAINT_STRATEGY_LOCAL_CONTEXT,
+      fill_mode: FILL_TRANSPARENT,
+      result_mode: RESULT_MODE_FEATHER_KNOWN,
+      hf_space_overlap_percentage: Math.max(
+        parameters.hf_space_overlap_percentage,
+        FREE_OUTPAINT_MIN_OVERLAP_PERCENTAGE,
+      ),
+    }
   }
   return parameters
 }

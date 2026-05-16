@@ -759,7 +759,13 @@ class GenerationService:
                     "directional_outpaint_plan.json",
                     directional_plan,
                 )
-            source = self._prepare_source_for_generation(image, mask, parameters, request.mode)
+            source = self._prepare_source_for_generation(
+                adapter,
+                image,
+                mask,
+                parameters,
+                request.mode,
+            )
             native_sketch_image = (
                 conditioning_image
                 if conditioning_image is not None and not adapter.capabilities.controlnet
@@ -969,6 +975,7 @@ class GenerationService:
 
     def _prepare_source_for_generation(
         self,
+        adapter: Any,
         image: Any,
         mask: Any,
         parameters: Any,
@@ -976,6 +983,16 @@ class GenerationService:
     ) -> Any:
         if mode == constants.GENERATION_MODE_INPAINT:
             return image.convert("RGB")
+        if _uses_hf_space_full_output(adapter, mode, parameters):
+            return image.convert("RGB")
+        if mode == constants.GENERATION_MODE_OUTPAINT and _adapter_returns_full_output(adapter):
+            source = image.convert("RGB")
+            generation_mask = normalize_mask(mask, source.size)
+            return Image.composite(
+                Image.new("RGB", source.size, (0, 0, 0)),
+                source,
+                generation_mask,
+            )
         return prepare_source_image(
             image,
             mask,

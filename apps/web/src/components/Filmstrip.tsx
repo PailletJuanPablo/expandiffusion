@@ -2,6 +2,7 @@ import { ChevronDown, ChevronUp, Download, History, RotateCcw } from 'lucide-rea
 import { EXPORT_FILE_NAME } from '../constants/domain'
 import type { DocumentBounds } from '../domain/types'
 import { renderDocumentDataUrl } from '../lib/canvasRender'
+import { ONBOARDING_TARGET_FILMSTRIP } from '../lib/onboardingTour'
 import { downloadDataUrl } from '../lib/projectArchive'
 import { useEditorStore } from '../store/editorStore'
 import { Button } from './ui/button'
@@ -24,6 +25,7 @@ export function Filmstrip({ collapsed, onCollapsedChange }: FilmstripProps) {
   return (
     <footer
       className={collapsed ? 'filmstrip filmstrip-collapsed' : 'filmstrip'}
+      data-tour-id={ONBOARDING_TARGET_FILMSTRIP}
     >
       <div className="filmstrip-actions">
         <Button

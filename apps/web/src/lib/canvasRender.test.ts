@@ -5,6 +5,7 @@ import {
   GENERATION_MODE_INPAINT,
   GENERATION_MODE_OUTPAINT,
   OUTPAINT_DIRECTION_DOWN,
+  OUTPAINT_DIRECTION_AROUND,
   OUTPAINT_DIRECTION_LEFT,
   OUTPAINT_DIRECTION_RIGHT,
   OUTPAINT_DIRECTION_UP,
@@ -25,7 +26,10 @@ import {
   planDirectionalOutpaintRender,
   directionalGeneratedBounds,
   composeSelectionResults,
+  planHfSpaceFillExpansion,
   planOutpaintRender,
+  prepareRasterImport,
+  renderDocumentDataUrl,
   renderGenerationInputs,
 } from './canvasRender'
 
@@ -91,12 +95,24 @@ class FakeCanvasContext {
     }
   }
 
-  drawImage(): void {
-    for (let index = 0; index < this.canvas.pixels.length; index += 4) {
-      this.canvas.pixels[index] = 32
-      this.canvas.pixels[index + 1] = 32
-      this.canvas.pixels[index + 2] = 36
-      this.canvas.pixels[index + 3] = 255
+  drawImage(_image: unknown, ...args: number[]): void {
+    const destination = destinationRectFromDrawImageArgs(
+      args,
+      this.canvas.width,
+      this.canvas.height,
+    )
+    const left = Math.max(0, Math.round(destination.x))
+    const top = Math.max(0, Math.round(destination.y))
+    const right = Math.min(this.canvas.width, Math.round(destination.x + destination.width))
+    const bottom = Math.min(this.canvas.height, Math.round(destination.y + destination.height))
+    for (let y = top; y < bottom; y += 1) {
+      for (let x = left; x < right; x += 1) {
+        const index = (y * this.canvas.width + x) * 4
+        this.canvas.pixels[index] = 32
+        this.canvas.pixels[index + 1] = 32
+        this.canvas.pixels[index + 2] = 36
+        this.canvas.pixels[index + 3] = 255
+      }
     }
   }
 
@@ -139,9 +155,31 @@ class FakeImage {
   onload: (() => void) | null = null
   onerror: (() => void) | null = null
 
-  set src(_value: string) {
+  set src(value: string) {
+    const size = value.match(/(\d+)x(\d+)/)
+    if (size) {
+      this.naturalWidth = Number.parseInt(size[1], 10)
+      this.naturalHeight = Number.parseInt(size[2], 10)
+    }
     queueMicrotask(() => this.onload?.())
   }
+}
+
+function destinationRectFromDrawImageArgs(
+  args: number[],
+  canvasWidth: number,
+  canvasHeight: number,
+): { x: number; y: number; width: number; height: number } {
+  if (args.length >= 8) {
+    return { x: args[4], y: args[5], width: args[6], height: args[7] }
+  }
+  if (args.length >= 4) {
+    return { x: args[0], y: args[1], width: args[2], height: args[3] }
+  }
+  if (args.length >= 2) {
+    return { x: args[0], y: args[1], width: canvasWidth, height: canvasHeight }
+  }
+  return { x: 0, y: 0, width: canvasWidth, height: canvasHeight }
 }
 
 describe('canvasRender', () => {
@@ -201,6 +239,65 @@ describe('canvasRender', () => {
       width: 900,
       height: 700,
     })
+  })
+
+  it('places the initial outpaint frame beside the imported image edge', async () => {
+    const raster = await prepareRasterImport('data:image/png;base64,raster')
+
+    expect(raster.rasterBounds).toEqual({
+      x: 512,
+      y: 512,
+      width: 128,
+      height: 128,
+    })
+    expect(raster.selection).toEqual({
+      x: 576,
+      y: 320,
+      width: 512,
+      height: 512,
+    })
+  })
+
+  it('downscales oversized raster imports before creating the workspace', async () => {
+    const raster = await prepareRasterImport('data:image/png;base64,6000x3000')
+
+    expect(raster.dataUrl).toContain('1536x768')
+    expect(raster.rasterBounds).toEqual({
+      x: 512,
+      y: 512,
+      width: 1536,
+      height: 768,
+    })
+    expect(raster.width).toBe(2560)
+    expect(raster.height).toBe(1792)
+  })
+
+  it('upscales tiny raster imports to a usable model input size', async () => {
+    const raster = await prepareRasterImport('data:image/png;base64,32x16')
+
+    expect(raster.dataUrl).toContain('128x64')
+    expect(raster.rasterBounds).toEqual({
+      x: 512,
+      y: 512,
+      width: 128,
+      height: 64,
+    })
+  })
+
+  it('exports only the visible document pixels', async () => {
+    const dataUrl = await renderDocumentDataUrl({
+      id: 'document',
+      width: 240,
+      height: 180,
+      rasterDataUrl: 'data:image/png;base64,raster',
+      rasterBounds: { x: 70, y: 55, width: 80, height: 40 },
+      selection: { x: 0, y: 0, width: 128, height: 128 },
+      maskStrokes: [],
+      controlStrokes: [],
+      references: [],
+    })
+
+    expect(dataUrl).toContain('80x40')
   })
 
   it('expands a left outpaint frame with adjacent source context', () => {
@@ -399,17 +496,18 @@ describe('canvasRender', () => {
     expect(plan.generatedRect).toEqual(expected.generatedRect)
   })
 
-  it('renders HF Space fill as a full-frame replacement input', async () => {
+  it('renders non-fixed HF Space fill as a normal free-frame outpaint input', async () => {
     const inputs = await renderGenerationInputs(documentWithGuide(), GENERATION_MODE_OUTPAINT, {
       outpaintStrategy: OUTPAINT_STRATEGY_HF_SPACE_FILL,
       outpaintDirection: OUTPAINT_DIRECTION_RIGHT,
       hfSpaceOverlapPercentage: 10,
+      hfSpaceFixedExpansion: false,
     })
 
     expect(inputs.selection).toEqual({ x: 0, y: 0, width: 128, height: 128 })
     expect(inputs.previewSelection).toEqual({ x: 0, y: 0, width: 128, height: 128 })
-    expect(inputs.replaceDocument).toBe(true)
-    expect(inputs.compositionMask).toBeNull()
+    expect(inputs.replaceDocument).toBe(false)
+    expect(inputs.compositionMask).toContain('128x128')
     expect(inputs.directionalPlan).toBeNull()
     expect(inputs.image).toContain('128x128')
     expect(inputs.mask).toContain('128x128')
@@ -431,11 +529,94 @@ describe('canvasRender', () => {
     const inputs = await renderGenerationInputs(documentState, GENERATION_MODE_OUTPAINT, {
       outpaintStrategy: OUTPAINT_STRATEGY_HF_SPACE_FILL,
       outpaintDirection: OUTPAINT_DIRECTION_RIGHT,
+      hfSpaceFixedExpansion: true,
     })
 
     expect(inputs.image).toContain('700x600')
-    expect(inputs.selection).toEqual({ x: -398, y: 0, width: 1496, height: 600 })
-    expect(inputs.previewSelection).toEqual({ x: -398, y: 0, width: 1496, height: 600 })
+    expect(inputs.selection).toEqual({ x: -665, y: -212, width: 1720, height: 1024 })
+    expect(inputs.previewSelection).toEqual(inputs.selection)
+  })
+
+  it('plans fixed HF Space around expansion as a centered output frame', async () => {
+    const documentState: EditorDocument = {
+      id: 'document',
+      width: 1200,
+      height: 900,
+      rasterDataUrl: 'data:image/png;base64,raster',
+      rasterBounds: { x: 100, y: 50, width: 700, height: 600 },
+      selection: { x: 0, y: 0, width: 128, height: 128 },
+      maskStrokes: [],
+      controlStrokes: [],
+      references: [],
+    }
+
+    const inputs = await renderGenerationInputs(documentState, GENERATION_MODE_OUTPAINT, {
+      outpaintStrategy: OUTPAINT_STRATEGY_HF_SPACE_FILL,
+      outpaintDirection: OUTPAINT_DIRECTION_AROUND,
+      outpaintGeneratedSize: 1536,
+      outpaintCrossSize: 1024,
+      hfSpaceFixedExpansion: true,
+      hfSpaceResizeOption: '50%',
+      hfSpaceOverlapPercentage: 12,
+    })
+
+    expect(inputs.selection).toEqual({ x: -318, y: -162, width: 1536, height: 1024 })
+    expect(inputs.previewSelection).toEqual(inputs.selection)
+    expect(inputs.replaceDocument).toBe(true)
+    expect(inputs.directionalPlan).toBeNull()
+  })
+
+  it('plans fixed HF Space side expansion from a percentage', () => {
+    const plan = planHfSpaceFillExpansion(
+      { x: 100, y: 50, width: 800, height: 600 },
+      {
+        direction: OUTPAINT_DIRECTION_RIGHT,
+        expansionPercent: 50,
+      },
+    )
+
+    expect(plan.selection).toEqual({ x: 100, y: 50, width: 1200, height: 600 })
+    expect(plan.renderSize).toEqual({ width: 1200, height: 600 })
+  })
+
+  it('plans fixed HF Space around expansion with separate width and height percentages', () => {
+    const plan = planHfSpaceFillExpansion(
+      { x: 100, y: 50, width: 800, height: 600 },
+      {
+        direction: OUTPAINT_DIRECTION_AROUND,
+        widthExpansionPercent: 50,
+        heightExpansionPercent: 25,
+      },
+    )
+
+    expect(plan.selection).toEqual({ x: -100, y: -22, width: 1200, height: 744 })
+    expect(plan.renderSize).toEqual({ width: 1200, height: 744 })
+  })
+
+  it('keeps the visual fixed frame while rendering HF Space fill at a lower scale', async () => {
+    const documentState: EditorDocument = {
+      id: 'document',
+      width: 1200,
+      height: 900,
+      rasterDataUrl: 'data:image/png;base64,raster',
+      rasterBounds: { x: 100, y: 50, width: 800, height: 600 },
+      selection: { x: 0, y: 0, width: 128, height: 128 },
+      maskStrokes: [],
+      controlStrokes: [],
+      references: [],
+    }
+
+    const inputs = await renderGenerationInputs(documentState, GENERATION_MODE_OUTPAINT, {
+      outpaintStrategy: OUTPAINT_STRATEGY_HF_SPACE_FILL,
+      outpaintDirection: OUTPAINT_DIRECTION_RIGHT,
+      hfSpaceFixedExpansion: true,
+      fixedExpandPercent: 50,
+      fixedExpandOutputScalePercent: 50,
+    })
+
+    expect(inputs.selection).toEqual({ x: 100, y: 50, width: 1200, height: 600 })
+    expect(inputs.renderSize).toEqual({ width: 600, height: 296 })
+    expect(inputs.previewSelection).toEqual(inputs.selection)
   })
 
   it('places full replacement results at the selected output frame instead of the origin', async () => {

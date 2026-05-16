@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import {
+  CONTROLNET_GUIDE_UI_ENABLED,
   GENERATION_MODE_INPAINT,
   GENERATION_MODE_OUTPAINT,
   TOOL_ERASE,
@@ -7,6 +8,7 @@ import {
   TOOL_PAN,
   TOOL_SELECT,
   TOOL_SHORTCUTS,
+  WORKSPACE_MODE_FREE_EDIT,
 } from "../constants/domain";
 import { CanvasWorkspace } from "./CanvasWorkspace";
 import { Filmstrip } from "./Filmstrip";
@@ -20,6 +22,7 @@ export function Studio() {
   const [filmstripCollapsed, setFilmstripCollapsed] = useState(false);
   const setTool = useEditorStore((state) => state.setTool);
   const setGenerationMode = useEditorStore((state) => state.setGenerationMode);
+  const setWorkspaceMode = useEditorStore((state) => state.setWorkspaceMode);
   const undo = useEditorStore((state) => state.undo);
   const redo = useEditorStore((state) => state.redo);
   const rejectResults = useEditorStore((state) => state.rejectResults);
@@ -59,9 +62,11 @@ export function Studio() {
         setTool(TOOL_ERASE);
       }
       if (key === TOOL_SHORTCUTS.INPAINT_MASK) {
+        setWorkspaceMode(WORKSPACE_MODE_FREE_EDIT);
         setGenerationMode(GENERATION_MODE_INPAINT);
       }
-      if (key === TOOL_SHORTCUTS.CONTROL_GUIDE) {
+      if (CONTROLNET_GUIDE_UI_ENABLED && key === TOOL_SHORTCUTS.CONTROL_GUIDE) {
+        setWorkspaceMode(WORKSPACE_MODE_FREE_EDIT);
         setGenerationMode(GENERATION_MODE_OUTPAINT);
         setTool(TOOL_CONTROL_GUIDE);
       }
@@ -88,6 +93,7 @@ export function Studio() {
     selectResult,
     selectedResultIndex,
     setGenerationMode,
+    setWorkspaceMode,
     setTool,
     undo,
   ]);

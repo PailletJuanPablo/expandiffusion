@@ -605,62 +605,10 @@ def test_sdxl_fill_controlnet_union_adapter_passes_repaint_conditioning(tmp_path
     assert pipeline.kwargs["image"].getpixel((100, 100)) == (100, 120, 140)
 
 
-def test_sdxl_fill_controlnet_union_adapter_converts_guide_to_scribble(tmp_path) -> None:
-    class DummyPipeline:
-        def encode_prompt(self, *_args):
-            return "prompt", "negative", "pooled", "negative-pooled"
-
-        def __call__(self, **kwargs):
-            self.kwargs = kwargs
-            yield Image.new("RGB", (1024, 1024), (30, 40, 50))
-
-    pipeline = DummyPipeline()
-    adapter = SdxlFillControlNetUnionAdapter()
-    adapter.pipeline = pipeline
-    adapter.device = "cpu"
-    source = Image.new("RGB", (1024, 1024), (100, 120, 140))
-    conditioning = source.copy()
-    conditioning.paste((255, 0, 0), (300, 300, 360, 340))
-    mask = Image.new("L", (1024, 1024), 0)
-    mask.paste(255, (256, 256, 768, 768))
-    context = GenerationContext(
-        source=source,
-        mask=mask,
-        conditioning_image=conditioning,
-        parameters=GenerationParameters(
-            prompt="replace object",
-            steps=2,
-            guidance_scale=7.0,
-            strength=1.0,
-            controlnet_conditioning_scale=0.9,
-            random_seed=False,
-            seed=123,
-            scheduler=constants.SCHEDULER_AUTO,
-        ),
-        progress=lambda _value, _message: None,
-        is_cancelled=lambda: False,
-        metadata={
-            "artifact_dir": str(tmp_path),
-            "generation_mode": constants.GENERATION_MODE_INPAINT,
-        },
-    )
-
-    adapter.generate(context)
-
-    scribble = pipeline.kwargs["extra_control_images"][2]
-    assert pipeline.kwargs["control_mode"] == 7
-    assert scribble.getpixel((310, 310)) == (255, 255, 255)
-    assert scribble.getpixel((100, 100)) == (0, 0, 0)
-    adapter_inputs = json.loads((tmp_path / "adapter_inputs.json").read_text())
-    assert adapter_inputs["control_modes"] == [7, 2]
-    assert adapter_inputs["uses_controlnet_scribble"] is True
-    assert (tmp_path / "adapter_scribble_input.png").exists()
-
-
 def test_sdxl_fill_controlnet_union_adapter_uses_last_space_output(tmp_path) -> None:
     class DummyPipeline:
         def encode_prompt(self, prompt, device, do_classifier_free_guidance):
-            assert prompt == "extend scene , high quality, 4k"
+            assert prompt == "extend scene"
             assert device == "cpu"
             assert do_classifier_free_guidance is True
             return "prompt", "negative", "pooled", "negative-pooled"
@@ -671,6 +619,7 @@ def test_sdxl_fill_controlnet_union_adapter_uses_last_space_output(tmp_path) -> 
             assert kwargs["num_inference_steps"] == 2
             assert kwargs["guidance_scale"] == 1.5
             assert kwargs["controlnet_conditioning_scale"] == 1.0
+            assert kwargs["control_mode"] == 6
             yield Image.new("RGB", (96, 96), (10, 20, 30))
             yield Image.new("RGB", (96, 96), (70, 80, 90))
 
@@ -700,6 +649,8 @@ def test_sdxl_fill_controlnet_union_adapter_uses_last_space_output(tmp_path) -> 
     assert adapter_inputs["process_size"] == [96, 96]
     assert adapter_inputs["steps"] == 2
     assert adapter_inputs["controlnet_conditioning_scale"] == 1.0
+    assert adapter_inputs["control_mode"] == 6
+    assert adapter_inputs["control_modes"] == [6]
 
 
 def test_sdxl_fill_controlnet_union_adapter_generates_multiple_samples(tmp_path) -> None:
@@ -806,6 +757,57 @@ def test_hf_space_fill_can_exclude_specific_overlap_sides() -> None:
         "bottom": True,
     }
     assert metadata["preserved_rect"] == [2, 2, 180, 144]
+
+
+def test_hf_space_fill_uses_prepared_control_image_without_edge_pad() -> None:
+    service = GenerationService.__new__(GenerationService)
+    adapter = _FullOutputTestAdapter()
+    image = Image.new("RGB", (6, 4), (0, 0, 0))
+    image.paste((120, 130, 140), (1, 1, 4, 3))
+    mask = Image.new("L", (6, 4), 255)
+    mask.paste(0, (1, 1, 4, 3))
+    parameters = GenerationParameters(
+        outpaint_strategy=constants.OUTPAINT_STRATEGY_HF_SPACE_FILL,
+        fill_mode=constants.FILL_EDGE_EXTEND,
+    )
+
+    source = service._prepare_source_for_generation(
+        adapter,
+        image,
+        mask,
+        parameters,
+        constants.GENERATION_MODE_OUTPAINT,
+    )
+
+    assert source.getpixel((0, 0)) == (0, 0, 0)
+    assert source.getpixel((2, 1)) == (120, 130, 140)
+
+
+def test_free_full_output_outpaint_blacks_generation_mask_before_adapter() -> None:
+    service = GenerationService.__new__(GenerationService)
+    adapter = _FullOutputTestAdapter()
+    image = Image.new("RGBA", (4, 1), (20, 30, 40, 255))
+    mask = Image.new("L", (4, 1), 0)
+    mask.putpixel((1, 0), 255)
+    mask.putpixel((2, 0), 255)
+    mask.putpixel((3, 0), 255)
+    parameters = GenerationParameters(
+        outpaint_strategy="local_context",
+        fill_mode=constants.FILL_TRANSPARENT,
+    )
+
+    source = service._prepare_source_for_generation(
+        adapter,
+        image,
+        mask,
+        parameters,
+        constants.GENERATION_MODE_OUTPAINT,
+    )
+
+    assert source.getpixel((0, 0)) == (20, 30, 40)
+    assert source.getpixel((1, 0)) == (0, 0, 0)
+    assert source.getpixel((2, 0)) == (0, 0, 0)
+    assert source.getpixel((3, 0)) == (0, 0, 0)
 
 
 def test_outpaint_composition_restores_known_pixels_before_returning_result() -> None:
@@ -1687,7 +1689,7 @@ def test_sdxl_ip_visual_refine_controls_do_not_touch_base_adapter() -> None:
     assert "visual_refine_enabled" not in base_controls
     assert "visual_refine_enabled" not in base_defaults
     assert "visual_refine_enabled" in refine_controls
-    assert refine_defaults["visual_refine_enabled"] is True
+    assert refine_defaults["visual_refine_enabled"] is False
     assert refine_defaults["visual_refine_strength"] == 0.45
     assert refine_defaults["ip_adapter_scale"] == 0.45
 
@@ -1698,15 +1700,26 @@ def test_sdxl_ip_visual_refine_can_skip_refine(monkeypatch) -> None:
     load_local_plugins(registry, constants.DEFAULT_PLUGIN_DIR, postprocessors)
     adapter = registry.get("sdxl-fill-ip-refine")
     base_image = Image.new("RGB", (32, 16), (11, 22, 33))
+    records = {}
 
     def fake_base_generate(_adapter, _context):
+        records["steps"] = _context.parameters.steps
+        records["controlnet_conditioning_scale"] = (
+            _context.parameters.controlnet_conditioning_scale
+        )
+        records["source_size"] = _context.source.size
+        records["mask_size"] = _context.mask.size
         return [base_image]
 
     monkeypatch.setattr(SdxlFillControlNetUnionAdapter, "generate", fake_base_generate)
     context = GenerationContext(
         source=Image.new("RGB", (32, 16), (100, 90, 80)),
         mask=_half_generation_mask(32, 16, 16),
-        parameters=GenerationParameters(visual_refine_enabled=False),
+        parameters=GenerationParameters(
+            steps=6,
+            controlnet_conditioning_scale=0.85,
+            visual_refine_enabled=False,
+        ),
         progress=lambda _value, _message: None,
         is_cancelled=lambda: False,
     )
@@ -1714,6 +1727,12 @@ def test_sdxl_ip_visual_refine_can_skip_refine(monkeypatch) -> None:
     images = adapter.generate(context)
 
     assert images == [base_image]
+    assert records == {
+        "steps": 6,
+        "controlnet_conditioning_scale": 0.85,
+        "source_size": (32, 16),
+        "mask_size": (32, 16),
+    }
 
 
 def test_sdxl_ip_visual_refine_uses_generation_mask_and_near_edge_reference(
@@ -3288,6 +3307,7 @@ def test_sd15_controlnet_adapter_passes_conditioning_to_pipeline() -> None:
     images = adapter.generate(context)
 
     assert len(images) == 1
+    assert images[0].size == (128, 128)
 
 
 def test_sd15_controlnet_adapter_can_run_without_active_guide() -> None:
@@ -3333,11 +3353,17 @@ def test_sdxl_controlnet_adapter_passes_conditioning_to_pipeline() -> None:
 
     class DummyPipeline:
         def __call__(self, **kwargs):
-            assert kwargs["control_image"].size == (128, 128)
+            assert kwargs["control_image"].size == (
+                constants.SDXL_MIN_PROCESS_SIZE,
+                constants.SDXL_MIN_PROCESS_SIZE,
+            )
             assert kwargs["controlnet_conditioning_scale"] == 0.85
             assert kwargs["control_guidance_start"] == 0.2
             assert kwargs["control_guidance_end"] == 0.9
-            assert kwargs["mask_image"].size == (128, 128)
+            assert kwargs["mask_image"].size == (
+                constants.SDXL_MIN_PROCESS_SIZE,
+                constants.SDXL_MIN_PROCESS_SIZE,
+            )
             image = Image.new("RGB", (kwargs["width"], kwargs["height"]), (5, 10, 15))
             return type("Output", (), {"images": [image]})()
 
@@ -3368,6 +3394,7 @@ def test_sdxl_controlnet_adapter_passes_conditioning_to_pipeline() -> None:
     images = adapter.generate(context)
 
     assert len(images) == 1
+    assert images[0].size == (128, 128)
 
 
 def test_standard_stable_diffusion_adapter_calls_img2img_without_mask_kwargs() -> None:

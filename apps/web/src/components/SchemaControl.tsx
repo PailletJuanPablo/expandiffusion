@@ -13,8 +13,12 @@ import {
   type PreprocessorDetails,
   preprocessorDetailsFor,
 } from '../lib/preprocessorDetails'
+import { controlHelpFor, controlOptionDetailsFor } from '../lib/controlHelp'
+import { ONBOARDING_TARGET_PROMPT_INPUT } from '../lib/onboardingTour'
 import { Input } from './ui/input'
 import { Textarea } from './ui/textarea'
+
+const PROMPT_CONTROL_ID = 'prompt'
 
 interface SchemaControlProps {
   control: ControlSchema
@@ -35,6 +39,9 @@ export function SchemaControl({
   disabled = false,
   onChange,
 }: SchemaControlProps) {
+  const help = controlHelpFor(control.id)
+  const optionDetails = controlOptionDetailsFor(control.id)
+
   if (control.kind === CONTROL_SELECT) {
     const selectedValue = stringValue(value, control.default_value)
     if (control.id === 'fill_mode') {
@@ -46,21 +53,27 @@ export function SchemaControl({
             options={control.options}
             disabled={disabled}
             optionDetails={PREPROCESSOR_DETAILS}
+            showSelectedDescription={false}
             onChange={(nextValue) => onChange(control.id, nextValue)}
           />
+          <ControlHelpText description={help} />
           <PreprocessorSummary details={preprocessorDetailsFor(selectedValue)} />
         </div>
       )
     }
 
     return (
-      <SelectControl
-        label={control.label}
-        value={selectedValue}
-        options={control.options}
-        disabled={disabled}
-        onChange={(nextValue) => onChange(control.id, nextValue)}
-      />
+      <div className="schema-control">
+        <SelectControl
+          label={control.label}
+          value={selectedValue}
+          options={control.options}
+          disabled={disabled}
+          optionDetails={optionDetails}
+          onChange={(nextValue) => onChange(control.id, nextValue)}
+        />
+        <ControlHelpText description={help} />
+      </div>
     )
   }
 
@@ -68,22 +81,25 @@ export function SchemaControl({
     const step = numericDefault(control.step, 1)
     const numberValue = numericValue(value, control.default_value)
     return (
-      <label className="field-label">
-        <span className="label-row">
-          {control.label}
-          <strong>{formatSliderValue(numberValue, step)}</strong>
-        </span>
-        <input
-          className="range-input"
-          type="range"
-          min={numericDefault(control.min, 0)}
-          max={numericDefault(control.max, 100)}
-          step={step}
-          value={numberValue}
-          disabled={disabled}
-          onChange={(event) => onChange(control.id, Number(event.target.value))}
-        />
-      </label>
+      <div className="schema-control">
+        <label className="field-label">
+          <span className="label-row">
+            {control.label}
+            <strong>{formatSliderValue(numberValue, step)}</strong>
+          </span>
+          <input
+            className="range-input"
+            type="range"
+            min={numericDefault(control.min, 0)}
+            max={numericDefault(control.max, 100)}
+            step={step}
+            value={numberValue}
+            disabled={disabled}
+            onChange={(event) => onChange(control.id, Number(event.target.value))}
+          />
+        </label>
+        <ControlHelpText description={help} />
+      </div>
     )
   }
 
@@ -91,60 +107,82 @@ export function SchemaControl({
     const min = numericDefault(control.min, 0)
     const max = numericDefault(control.max, 100)
     return (
-      <NumberStepper
-        label={control.label}
-        value={numericValue(value, control.default_value)}
-        min={min}
-        max={max}
-        step={numericDefault(control.step, 1)}
-        disabled={disabled}
-        onChange={(nextValue) => onChange(control.id, nextValue)}
-      />
+      <div className="schema-control">
+        <NumberStepper
+          label={control.label}
+          value={numericValue(value, control.default_value)}
+          min={min}
+          max={max}
+          step={numericDefault(control.step, 1)}
+          disabled={disabled}
+          onChange={(nextValue) => onChange(control.id, nextValue)}
+        />
+        <ControlHelpText description={help} />
+      </div>
     )
   }
 
   if (control.kind === CONTROL_SWITCH) {
     return (
-      <div className="switch-row">
-        <span>{control.label}</span>
-        <button
-          type="button"
-          className={value ? 'switch-root switch-root-checked' : 'switch-root'}
-          disabled={disabled}
-          onClick={() => onChange(control.id, !value)}
-        >
-          <span className={value ? 'switch-thumb switch-thumb-checked' : 'switch-thumb'} />
-        </button>
+      <div className="schema-control">
+        <div className="switch-row">
+          <span>{control.label}</span>
+          <button
+            type="button"
+            className={value ? 'switch-root switch-root-checked' : 'switch-root'}
+            disabled={disabled}
+            onClick={() => onChange(control.id, !value)}
+          >
+            <span className={value ? 'switch-thumb switch-thumb-checked' : 'switch-thumb'} />
+          </button>
+        </div>
+        <ControlHelpText description={help} />
       </div>
     )
   }
 
   if (control.kind === CONTROL_TEXTAREA) {
     return (
-      <label className="field-label">
-        {control.label}
-        <Textarea
-          value={stringValue(value, control.default_value)}
-          disabled={disabled}
-          rows={control.rows ?? 3}
-          placeholder={control.placeholder ?? undefined}
-          onChange={(event) => onChange(control.id, event.target.value)}
-        />
-      </label>
+      <div className="schema-control">
+        <label className="field-label">
+          {control.label}
+          <Textarea
+            data-tour-id={
+              control.id === PROMPT_CONTROL_ID ? ONBOARDING_TARGET_PROMPT_INPUT : undefined
+            }
+            value={stringValue(value, control.default_value)}
+            disabled={disabled}
+            rows={control.rows ?? 3}
+            placeholder={control.placeholder ?? undefined}
+            onChange={(event) => onChange(control.id, event.target.value)}
+          />
+        </label>
+        <ControlHelpText description={help} />
+      </div>
     )
   }
 
   return (
-    <label className="field-label">
-      {control.label}
-      <Input
-        value={stringValue(value, control.default_value)}
-        disabled={disabled}
-        placeholder={control.placeholder ?? undefined}
-        onChange={(event) => onChange(control.id, event.target.value)}
-      />
-    </label>
+    <div className="schema-control">
+      <label className="field-label">
+        {control.label}
+        <Input
+          value={stringValue(value, control.default_value)}
+          disabled={disabled}
+          placeholder={control.placeholder ?? undefined}
+          onChange={(event) => onChange(control.id, event.target.value)}
+        />
+      </label>
+      <ControlHelpText description={help} />
+    </div>
   )
+}
+
+function ControlHelpText({ description }: { description: string | null }) {
+  if (!description) {
+    return null
+  }
+  return <p className="control-help-text">{description}</p>
 }
 
 function PreprocessorSummary({

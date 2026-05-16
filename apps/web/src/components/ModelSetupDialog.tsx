@@ -1,4 +1,5 @@
-import { Power, PowerOff, Square, X } from 'lucide-react'
+import { ChevronDown, ChevronRight, Power, PowerOff, Square, X } from 'lucide-react'
+import { useMemo, useState } from 'react'
 import {
   CONTROL_SECTION_EXTENSIONS,
   CONTROL_SECTION_RUNTIME,
@@ -7,7 +8,16 @@ import {
   MODEL_SOURCE_FIELD_MODEL_URL,
   MODEL_SOURCE_FIELD_SINGLE_FILE_PATH,
 } from '../constants/domain'
-import type { AdapterInfo, ControlSchema, ModelInfo, ModelLoadProgress, RuntimeInfo } from '../domain/types'
+import type {
+  AdapterInfo,
+  ControlSchema,
+  GenerationParameters,
+  ModelInfo,
+  ModelLoadProgress,
+  PluginInfo,
+  PostprocessorInfo,
+  RuntimeInfo,
+} from '../domain/types'
 import { controlsForSection } from '../lib/controlSchemas'
 import {
   getActiveModelSource,
@@ -15,6 +25,12 @@ import {
   getModelSourceValue,
   type ModelSourceValues,
 } from '../lib/modelSources'
+import {
+  getModelSetupAdapterGroups,
+  getModelSetupDetails,
+} from '../lib/modelSetupExperience'
+import { ONBOARDING_TARGET_SETUP_DIALOG } from '../lib/onboardingTour'
+import { PluginManagerSection } from './PluginManagerSection'
 import { SchemaControl } from './SchemaControl'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
@@ -39,6 +55,11 @@ interface ModelSetupDialogProps {
   loadDisabled: boolean
   unloading: boolean
   cancelPending: boolean
+  plugins: PluginInfo[]
+  pluginControls: ControlSchema[]
+  pluginPostprocessors: PostprocessorInfo[]
+  parameters: GenerationParameters
+  pendingPluginId: string | null
   onClose: () => void
   onAdapterChange: (adapterId: string) => void
   onModelSourceChange: (value: string) => void
@@ -55,6 +76,8 @@ interface ModelSetupDialogProps {
   onLoad: () => void
   onUnload: () => void
   onCancelLoad: () => void
+  onPluginToggle: (plugin: PluginInfo) => void
+  onParameterChange: (id: string, value: unknown) => void
 }
 
 /**
@@ -82,6 +105,11 @@ export function ModelSetupDialog({
   loadDisabled,
   unloading,
   cancelPending,
+  plugins,
+  pluginControls,
+  pluginPostprocessors,
+  parameters,
+  pendingPluginId,
   onClose,
   onAdapterChange,
   onModelSourceChange,
@@ -98,17 +126,29 @@ export function ModelSetupDialog({
   onLoad,
   onUnload,
   onCancelLoad,
+  onPluginToggle,
+  onParameterChange,
 }: ModelSetupDialogProps) {
+  const [showExperimentalAdapters, setShowExperimentalAdapters] = useState(false)
+  const [activeTab, setActiveTab] = useState<'model' | 'plugins'>('model')
+  const adapterGroups = useMemo(
+    () => getModelSetupAdapterGroups(adapters),
+    [adapters],
+  )
+  const selectedMoreOption = adapterGroups.experimental.some(
+    (adapter) => adapter.id === selectedAdapterId,
+  )
+  const showMoreOptions = showExperimentalAdapters || selectedMoreOption
   const modelSources = getModelSources(selectedAdapter)
   const activeSource = getActiveModelSource(selectedAdapter, modelSource)
   const runtimeControls = controlsForSection(
     selectedAdapter?.load_controls ?? [],
     CONTROL_SECTION_RUNTIME,
-  )
+  ).filter((control) => control.id !== 'controlnet_model_id' || control.options.length > 1)
   const extensionControls = controlsForSection(
     selectedAdapter?.load_controls ?? [],
     CONTROL_SECTION_EXTENSIONS,
-  )
+  ).filter((control) => control.id !== 'loras')
 
   return (
     <div
@@ -117,7 +157,7 @@ export function ModelSetupDialog({
       aria-modal="true"
       aria-label="Model setup"
     >
-      <div className="setup-dialog">
+      <div className="setup-dialog" data-tour-id={ONBOARDING_TARGET_SETUP_DIALOG}>
         <div className="setup-header">
           <div>
             <h2>Model setup</h2>
@@ -135,148 +175,278 @@ export function ModelSetupDialog({
             <X size={16} />
           </Button>
         </div>
-        <div className="setup-grid">
-          <section className="setup-section">
-            <div className="section-heading">
-              <span>Adapter</span>
-            </div>
-            <label className="field-label">
-              Adapter
-              <select
-                value={selectedAdapterId}
-                disabled={loading}
-                onChange={(event) => onAdapterChange(event.target.value)}
-              >
-                {adapters.map((adapter) => (
-                  <option key={adapter.id} value={adapter.id}>
-                    {adapter.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <AdapterCapabilities adapter={selectedAdapter} />
-            <label className="field-label">
-              Model source
-              <select
-                value={activeSource.id}
-                disabled={loading}
-                onChange={(event) => onModelSourceChange(event.target.value)}
-              >
-                {modelSources.map((source) => (
-                  <option key={source.id} value={source.id}>
-                    {source.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="field-label">
-              {activeSource.label}
-              <Input
-                value={getModelSourceValue(activeSource, sourceValues)}
-                disabled={loading}
-                placeholder={activeSource.placeholder ?? undefined}
-                onChange={(event) =>
-                  updateModelSourceValue(
-                    activeSource.request_field,
-                    event.target.value,
-                    onModelIdChange,
-                    onLocalPathChange,
-                    onSingleFilePathChange,
-                    onModelUrlChange,
-                  )
-                }
-              />
-            </label>
-          </section>
-          <section className="setup-section">
-            <div className="section-heading">
-              <span>Runtime</span>
-            </div>
-            {runtimeControls.map((control) => (
-              <SchemaControl
-                key={control.id}
-                control={runtimeControl(control, runtime)}
-                value={runtimeControlValue(
-                  control.id,
-                  device,
-                  dtype,
-                  controlnetModelId,
-                  safetyChecker,
-                )}
-                onChange={(id, value) =>
-                  updateRuntimeControl(
-                    id,
-                    value,
-                    onDeviceChange,
-                    onDtypeChange,
-                    onControlnetModelIdChange,
-                    onSafetyCheckerChange,
-                  )
-                }
-              />
-            ))}
-            <RuntimeDetails runtime={runtime} />
-          </section>
-          <section className="setup-section setup-section-wide">
-            <div className="section-heading">
-              <span>Load-time extensions</span>
-            </div>
-            {extensionControls.map((control) => (
-              <SchemaControl
-                key={control.id}
-                control={control}
-                value={extensionValue(control.id, loraText, textualInversionText)}
-                onChange={(id, value) =>
-                  updateExtensionValue(
-                    id,
-                    value,
-                    onLoraTextChange,
-                    onTextualInversionTextChange,
-                  )
-                }
-              />
-            ))}
-          </section>
-        </div>
-        <ModelLoadedStatus activeModel={activeModel} />
-        <div className="setup-actions">
-          <Button
+        <div className="setup-tabs" role="tablist" aria-label="Setup sections">
+          <button
             type="button"
-            variant="primary"
-            size="large"
-            disabled={loading || loadDisabled}
-            onClick={onLoad}
+            className={activeTab === 'model' ? 'setup-tab setup-tab-active' : 'setup-tab'}
+            role="tab"
+            aria-selected={activeTab === 'model'}
+            onClick={() => setActiveTab('model')}
           >
-            <Power size={16} />
-            {loadButtonLabel(loading, activeModel, selectedAdapterId)}
-          </Button>
-          {loading ? (
-            <Button
-              type="button"
-              variant="secondary"
-              size="large"
-              disabled={cancelPending}
-              onClick={onCancelLoad}
-            >
-              <Square size={15} />
-              {cancelPending ? 'Cancelling' : 'Cancel load'}
-            </Button>
-          ) : (
-            <Button
-              type="button"
-              variant="secondary"
-              size="large"
-              disabled={!activeModel?.loaded || unloading}
-              onClick={onUnload}
-            >
-              <PowerOff size={16} />
-              {unloading ? 'Unloading' : 'Unload model'}
-            </Button>
-          )}
+            Model
+          </button>
+          <button
+            type="button"
+            className={activeTab === 'plugins' ? 'setup-tab setup-tab-active' : 'setup-tab'}
+            role="tab"
+            aria-selected={activeTab === 'plugins'}
+            onClick={() => setActiveTab('plugins')}
+          >
+            Plugins
+            <span>{plugins.filter((plugin) => plugin.enabled).length}/{plugins.length}</span>
+          </button>
         </div>
-        {loading ? <ModelLoadProgressBlock progress={loadProgress} /> : null}
+        {activeTab === 'model' ? (
+          <>
+            <div className="setup-main" role="tabpanel" aria-label="Model">
+              <div className="setup-grid">
+                <section className="setup-section">
+              <div className="section-heading">
+                <span>Choose a model type</span>
+              </div>
+              <p className="setup-helper-text">
+                Start with the recommended profile. Experimental families and
+                technical variants stay under more options.
+              </p>
+              <AdapterChoiceGroup
+                adapters={adapterGroups.primary}
+                selectedAdapterId={selectedAdapterId}
+                loading={loading}
+                onAdapterChange={onAdapterChange}
+              />
+              {adapterGroups.experimental.length > 0 ? (
+                <div className="experimental-adapter-block">
+                  <button
+                    type="button"
+                    className="experimental-adapter-toggle"
+                    aria-expanded={showMoreOptions}
+                    onClick={() =>
+                      setShowExperimentalAdapters((current) => !current)
+                    }
+                  >
+                    {showMoreOptions ? (
+                      <ChevronDown size={16} />
+                    ) : (
+                      <ChevronRight size={16} />
+                    )}
+                    <span>More options</span>
+                    <small>Flux, Chroma and technical profiles</small>
+                  </button>
+                  {showMoreOptions ? (
+                    <AdapterChoiceGroup
+                      adapters={adapterGroups.experimental}
+                      selectedAdapterId={selectedAdapterId}
+                      loading={loading}
+                      onAdapterChange={onAdapterChange}
+                    />
+                  ) : null}
+                </div>
+              ) : null}
+              <label className="field-label">
+                Model source
+                <select
+                  value={activeSource.id}
+                  disabled={loading}
+                  onChange={(event) => onModelSourceChange(event.target.value)}
+                >
+                  {modelSources.map((source) => (
+                    <option key={source.id} value={source.id}>
+                      {source.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="field-label">
+                {activeSource.label}
+                <Input
+                  value={getModelSourceValue(activeSource, sourceValues)}
+                  disabled={loading}
+                  placeholder={activeSource.placeholder ?? undefined}
+                  onChange={(event) =>
+                    updateModelSourceValue(
+                      activeSource.request_field,
+                      event.target.value,
+                      onModelIdChange,
+                      onLocalPathChange,
+                      onSingleFilePathChange,
+                      onModelUrlChange,
+                    )
+                  }
+                />
+              </label>
+                </section>
+                <section className="setup-section">
+              <div className="section-heading">
+                <span>Runtime</span>
+              </div>
+              {runtimeControls.map((control) => {
+                const renderedControl = runtimeControl(control, runtime)
+                return (
+                  <SchemaControl
+                    key={control.id}
+                    control={renderedControl}
+                    value={runtimeControlValue(
+                      renderedControl,
+                      device,
+                      dtype,
+                      controlnetModelId,
+                      safetyChecker,
+                    )}
+                    onChange={(id, value) =>
+                      updateRuntimeControl(
+                        id,
+                        value,
+                        onDeviceChange,
+                        onDtypeChange,
+                        onControlnetModelIdChange,
+                        onSafetyCheckerChange,
+                      )
+                    }
+                  />
+                )
+              })}
+              <RuntimeDetails runtime={runtime} />
+                </section>
+                {extensionControls.length > 0 ? (
+                  <section className="setup-section setup-section-wide">
+                <div className="section-heading">
+                  <span>Load-time extensions</span>
+                </div>
+                {extensionControls.map((control) => (
+                  <SchemaControl
+                    key={control.id}
+                    control={control}
+                    value={extensionValue(control.id, loraText, textualInversionText)}
+                    onChange={(id, value) =>
+                      updateExtensionValue(
+                        id,
+                        value,
+                        onLoraTextChange,
+                        onTextualInversionTextChange,
+                      )
+                    }
+                  />
+                ))}
+                  </section>
+                ) : null}
+              </div>
+              <ModelLoadedStatus activeModel={activeModel} />
+              {loading ? <ModelLoadProgressBlock progress={loadProgress} /> : null}
+            </div>
+            <div className="setup-actions">
+              <Button
+                type="button"
+                variant="primary"
+                size="large"
+                disabled={loading || loadDisabled}
+                onClick={onLoad}
+              >
+                <Power size={16} />
+                {loadButtonLabel(loading, activeModel, selectedAdapterId)}
+              </Button>
+              {loading ? (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="large"
+                  disabled={cancelPending}
+                  onClick={onCancelLoad}
+                >
+                  <Square size={15} />
+                  {cancelPending ? 'Cancelling' : 'Cancel load'}
+                </Button>
+              ) : (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="large"
+                  disabled={!activeModel?.loaded || unloading}
+                  onClick={onUnload}
+                >
+                  <PowerOff size={16} />
+                  {unloading ? 'Unloading' : 'Unload model'}
+                </Button>
+              )}
+            </div>
+          </>
+        ) : (
+          <div className="setup-main setup-plugin-pane" role="tabpanel" aria-label="Plugins">
+            <PluginManagerSection
+              plugins={plugins}
+              controls={pluginControls}
+              postprocessors={pluginPostprocessors}
+              parameters={parameters}
+              pendingPluginId={pendingPluginId}
+              onToggle={onPluginToggle}
+              onParameterChange={onParameterChange}
+            />
+          </div>
+        )}
       </div>
     </div>
+  )
+}
+
+function AdapterChoiceGroup({
+  adapters,
+  selectedAdapterId,
+  loading,
+  onAdapterChange,
+}: {
+  adapters: AdapterInfo[]
+  selectedAdapterId: string
+  loading: boolean
+  onAdapterChange: (adapterId: string) => void
+}) {
+  if (adapters.length === 0) {
+    return <div className="adapter-choice-empty">No model profiles available.</div>
+  }
+  return (
+    <div className="adapter-choice-list">
+      {adapters.map((adapter) => (
+        <AdapterChoice
+          key={adapter.id}
+          adapter={adapter}
+          selected={adapter.id === selectedAdapterId}
+          loading={loading}
+          onSelect={() => onAdapterChange(adapter.id)}
+        />
+      ))}
+    </div>
+  )
+}
+
+function AdapterChoice({
+  adapter,
+  selected,
+  loading,
+  onSelect,
+}: {
+  adapter: AdapterInfo
+  selected: boolean
+  loading: boolean
+  onSelect: () => void
+}) {
+  const details = getModelSetupDetails(adapter)
+  return (
+    <button
+      type="button"
+      className={selected ? 'adapter-choice adapter-choice-selected' : 'adapter-choice'}
+      aria-pressed={selected}
+      disabled={loading}
+      onClick={onSelect}
+    >
+      <span className="adapter-choice-header">
+        <strong>{adapter.label}</strong>
+        {selected ? <span>Selected</span> : null}
+      </span>
+      <span className="adapter-choice-summary">{details.summary}</span>
+      <span className="adapter-choice-best-for">{details.bestFor}</span>
+      <span className="adapter-choice-limits">
+        <strong>Limits</strong>
+        <span>{details.limitations.join(' ')}</span>
+      </span>
+    </button>
   )
 }
 
@@ -346,28 +516,6 @@ function formatBytes(value: number): string {
   return `${amount.toFixed(1)} TB`
 }
 
-function AdapterCapabilities({ adapter }: { adapter: AdapterInfo | undefined }) {
-  if (!adapter) {
-    return <div className="capability-row">No adapters reported by backend.</div>
-  }
-  const labels = [
-    adapter.capabilities.inpaint ? 'inpaint' : '',
-    adapter.capabilities.outpaint ? 'outpaint' : '',
-    adapter.capabilities.controlnet ? 'ControlNet' : '',
-    adapter.capabilities.img2img ? 'img2img' : '',
-    adapter.capabilities.lora ? 'LoRA' : '',
-    adapter.capabilities.textual_inversion ? 'TI' : '',
-    adapter.capabilities.from_single_file ? 'single-file' : '',
-  ].filter(Boolean)
-  return (
-    <div className="capability-row">
-      {labels.map((label) => (
-        <span key={label}>{label}</span>
-      ))}
-    </div>
-  )
-}
-
 function RuntimeDetails({ runtime }: { runtime: RuntimeInfo | undefined }) {
   if (!runtime) {
     return <div className="runtime-details">Runtime unavailable.</div>
@@ -402,19 +550,25 @@ function runtimeControl(control: ControlSchema, runtime: RuntimeInfo | undefined
 }
 
 function runtimeControlValue(
-  id: string,
+  control: ControlSchema,
   device: string,
   dtype: string,
   controlnetModelId: string,
   safetyChecker: boolean,
 ): unknown {
-  if (id === 'dtype') {
+  if (control.id === 'dtype') {
     return dtype
   }
-  if (id === 'controlnet_model_id') {
-    return controlnetModelId
+  if (control.id === 'controlnet_model_id') {
+    if (control.options.some((option) => option.id === controlnetModelId)) {
+      return controlnetModelId
+    }
+    if (typeof control.default_value === 'string' && control.default_value) {
+      return control.default_value
+    }
+    return control.options[0]?.id ?? ''
   }
-  if (id === 'safety_checker') {
+  if (control.id === 'safety_checker') {
     return safetyChecker
   }
   return device

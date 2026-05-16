@@ -46,3 +46,22 @@ export function controlnetModelIdForAdapter(adapter: AdapterInfo | undefined): s
   );
   return typeof control?.default_value === "string" ? control.default_value : null;
 }
+
+export function controlnetModelIdForAdapterValue(
+  adapter: AdapterInfo | undefined,
+  currentValue: string,
+): string {
+  const control = adapter?.load_controls.find(
+    (item) => item.id === "controlnet_model_id",
+  );
+  if (!control) {
+    return currentValue;
+  }
+  if (control.options.some((option) => option.id === currentValue)) {
+    return currentValue;
+  }
+  if (typeof control.default_value === "string" && control.default_value) {
+    return control.default_value;
+  }
+  return control.options[0]?.id ?? currentValue;
+}

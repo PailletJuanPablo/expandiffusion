@@ -8,6 +8,7 @@ import {
 import type { AdapterInfo } from '../domain/types'
 import {
   adapterIdForControlGuideMode,
+  controlnetModelIdForAdapterValue,
   controlnetModelIdForAdapter,
 } from './controlGuideMode'
 
@@ -34,6 +35,14 @@ describe('controlGuideMode', () => {
     const adapter = adapters().find((item) => item.id === ADAPTER_SDXL_CONTROLNET_INPAINT)
 
     expect(controlnetModelIdForAdapter(adapter)).toBe('xinsir/controlnet-tile-sdxl-1.0')
+  })
+
+  it('falls back to the selected adapter default when the current ControlNet value belongs to another adapter', () => {
+    const adapter = adapters().find((item) => item.id === ADAPTER_SDXL_CONTROLNET_INPAINT)
+
+    expect(
+      controlnetModelIdForAdapterValue(adapter, 'lllyasviel/control_v11f1e_sd15_tile'),
+    ).toBe('xinsir/controlnet-tile-sdxl-1.0')
   })
 })
 

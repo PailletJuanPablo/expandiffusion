@@ -29,6 +29,11 @@ import {
   ZOOM_STEP,
   STROKE_PAINT,
   OUTPAINT_STRATEGY_DIRECTIONAL,
+  OUTPAINT_DIRECTION_AROUND,
+  OUTPAINT_DIRECTION_DOWN,
+  OUTPAINT_DIRECTION_LEFT,
+  OUTPAINT_DIRECTION_UP,
+  WORKSPACE_MODE_EXPAND_IMAGE,
   isPluginEditorTool,
   pluginToolIdFromEditorTool,
   PLUGIN_TOOL_TARGET_IMAGE,
@@ -37,13 +42,21 @@ import type {
   CanvasSelectionTarget,
   ControlStroke,
   DocumentBounds,
+  GenerationParameters,
   MaskStroke,
   Point,
   ReferenceImageLayer,
+  SelectionRect,
 } from "../domain/types";
 import { useImageElement } from "../hooks/useImageElement";
 import { useStudioQueries } from "../hooks/useStudioQueries";
-import { eraseRasterStroke } from "../lib/canvasRender";
+import {
+  eraseRasterStroke,
+  type HfSpaceFillExpansionPlan,
+  planHfSpaceFillExpansion,
+} from "../lib/canvasRender";
+import { planCenteredDocumentViewport } from "../lib/canvasViewport";
+import { ONBOARDING_TARGET_CANVAS } from "../lib/onboardingTour";
 import { useEditorStore } from "../store/editorStore";
 import { CANVAS_THEME } from "../theme/canvasTheme";
 import { Button } from "./ui/button";
@@ -58,6 +71,8 @@ export function CanvasWorkspace() {
   const stageRef = useRef<Konva.Stage>(null);
   const selectionRef = useRef<Konva.Rect>(null);
   const transformerRef = useRef<Konva.Transformer>(null);
+  const previousRasterDataUrlRef = useRef<string | null>(null);
+  const rasterObservationStartedRef = useRef(false);
   const [size, setSize] = useState({ width: 900, height: 700 });
   const [isDrawing, setIsDrawing] = useState(false);
   const [erasePoints, setErasePoints] = useState<Point[]>([]);
@@ -81,11 +96,13 @@ export function CanvasWorkspace() {
     Boolean(documentState.rasterDataUrl);
   const viewport = useEditorStore((state) => state.viewport);
   const tool = useEditorStore((state) => state.tool);
+  const workspaceMode = useEditorStore((state) => state.workspaceMode);
   const generationMode = useEditorStore((state) => state.generationMode);
-  const outpaintStrategy = useEditorStore(
-    (state) => state.parameters.outpaint_strategy,
-  );
+  const parameters = useEditorStore((state) => state.parameters);
+  const outpaintStrategy = parameters.outpaint_strategy;
+  const expandImageActive = workspaceMode === WORKSPACE_MODE_EXPAND_IMAGE;
   const directionalOutpaintActive =
+    expandImageActive ||
     generationMode === GENERATION_MODE_OUTPAINT &&
     outpaintStrategy === OUTPAINT_STRATEGY_DIRECTIONAL;
   const panModifierActive = shiftPressed;
@@ -104,11 +121,13 @@ export function CanvasWorkspace() {
   const frameVisible =
     pluginFrameToolActive ||
     (generationMode === GENERATION_MODE_OUTPAINT &&
+      !expandImageActive &&
       !directionalOutpaintActive &&
       (frameToolActive || selectToolActive));
   const frameSelectionActive =
     pluginFrameToolActive ||
     (generationMode === GENERATION_MODE_OUTPAINT &&
+      !expandImageActive &&
       !directionalOutpaintActive &&
       (frameToolActive || (selectToolActive && frameSelected)));
   const imageSelectionToolActive = selectToolActive || pluginImageToolActive;
@@ -175,6 +194,7 @@ export function CanvasWorkspace() {
   );
   const rejectResults = useEditorStore((state) => state.rejectResults);
   const setErrorMessage = useEditorStore((state) => state.setErrorMessage);
+  const updateParameter = useEditorStore((state) => state.updateParameter);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -193,6 +213,33 @@ export function CanvasWorkspace() {
     observer.observe(container);
     return () => observer.disconnect();
   }, []);
+
+  useEffect(() => {
+    const previousRasterDataUrl = previousRasterDataUrlRef.current;
+    previousRasterDataUrlRef.current = documentState.rasterDataUrl;
+    if (!rasterObservationStartedRef.current) {
+      rasterObservationStartedRef.current = true;
+      return;
+    }
+    if (
+      previousRasterDataUrl ||
+      !documentState.rasterDataUrl ||
+      !documentState.rasterBounds
+    ) {
+      return;
+    }
+    const nextViewport = planCenteredDocumentViewport(
+      canvasFocusBounds(documentState.rasterBounds, documentState.selection),
+      size,
+    );
+    setViewport(nextViewport.x, nextViewport.y, nextViewport.zoom);
+  }, [
+    documentState.rasterBounds,
+    documentState.rasterDataUrl,
+    documentState.selection,
+    setViewport,
+    size,
+  ]);
 
   useEffect(() => {
     const transformer = transformerRef.current;
@@ -281,7 +328,7 @@ export function CanvasWorkspace() {
     }
     if (tool === TOOL_SELECT && event.target === stageRef.current) {
       setCanvasSelectionTarget(
-        generationMode === GENERATION_MODE_OUTPAINT
+        generationMode === GENERATION_MODE_OUTPAINT && !expandImageActive
           ? { kind: "frame" }
           : { kind: "none" },
       );
@@ -386,12 +433,19 @@ export function CanvasWorkspace() {
   const jobRunning =
     currentJob?.status === "queued" || currentJob?.status === "running";
   const jobSelection = currentJobSelection ?? documentState.selection;
+  const expandPreview = expandImageActive
+    ? fixedExpansionPreview(documentState, parameters)
+    : null;
   const eraserHardnessRadius = getEraserHardnessRadius(
     brushSize,
     eraserHardness,
   );
   return (
-    <main className="canvas-shell" ref={containerRef}>
+    <main
+      className="canvas-shell"
+      ref={containerRef}
+      data-tour-id={ONBOARDING_TARGET_CANVAS}
+    >
       {previewImage ? (
         <ResultControls
           count={pendingResults.length}
@@ -548,6 +602,20 @@ export function CanvasWorkspace() {
               listening={false}
             />
           ) : null}
+          {expandPreview ? (
+            <FixedExpansionPreview
+              preview={expandPreview}
+              zoom={viewport.zoom}
+              onResize={(handle, point) =>
+                updateFixedExpansionFromHandle(
+                  expandPreview,
+                  handle,
+                  point,
+                  updateParameter,
+                )
+              }
+            />
+          ) : null}
           {jobRunning && currentJob ? (
             <JobProgressOverlay job={currentJob} selection={jobSelection} />
           ) : null}
@@ -587,6 +655,449 @@ export function CanvasWorkspace() {
       </Stage>
     </main>
   );
+}
+
+function FixedExpansionPreview({
+  preview,
+  zoom,
+  onResize,
+}: {
+  preview: FixedExpansionPreviewState;
+  zoom: number;
+  onResize: (handle: FixedExpansionResizeHandle, point: Point) => void;
+}) {
+  const [hoveredHandle, setHoveredHandle] =
+    useState<FixedExpansionResizeHandle | null>(null);
+  const strokeWidth = 2 / zoom;
+  const handleSize = 12 / zoom;
+  const { plan, sourceBounds, overlapPercentage, overlapSides, showGuides } = preview;
+  const bounds = plan.selection;
+  const generatedRects = fixedGeneratedRects(bounds, sourceBounds);
+  const overlapRects = fixedOverlapRects(
+    sourceBounds,
+    overlapPercentage,
+    overlapSides,
+  );
+  const resizeHandles = fixedResizeHandles(preview, handleSize);
+  return (
+    <Group>
+      {showGuides
+        ? generatedRects.map((rect, index) => (
+            <Rect
+              key={`fixed-generated-${index}`}
+              x={rect.x}
+              y={rect.y}
+              width={rect.width}
+              height={rect.height}
+              fill="rgba(18, 184, 200, 0.14)"
+              listening={false}
+            />
+          ))
+        : null}
+      {showGuides
+        ? overlapRects.map((rect, index) => (
+            <Rect
+              key={`fixed-overlap-${index}`}
+              x={rect.x}
+              y={rect.y}
+              width={rect.width}
+              height={rect.height}
+              fill="rgba(34, 197, 94, 0.16)"
+              stroke="rgba(13, 148, 136, 0.52)"
+              strokeWidth={strokeWidth}
+              listening={false}
+            />
+          ))
+        : null}
+      <Rect
+        x={bounds.x}
+        y={bounds.y}
+        width={bounds.width}
+        height={bounds.height}
+        fill="rgba(18, 184, 200, 0.04)"
+        stroke="rgba(14, 116, 144, 0.92)"
+        strokeWidth={strokeWidth}
+        dash={[12 / zoom, 8 / zoom]}
+        listening={false}
+      />
+      {resizeHandles.map((handle) => (
+        <Rect
+          key={handle.id}
+          x={handle.x}
+          y={handle.y}
+          width={handle.width}
+          height={handle.height}
+          fill={hoveredHandle === handle.id ? "#67e8f9" : "#ffffff"}
+          stroke={
+            hoveredHandle === handle.id
+              ? "rgba(8, 145, 178, 1)"
+              : "rgba(14, 116, 144, 0.92)"
+          }
+          strokeWidth={hoveredHandle === handle.id ? 2.5 / zoom : strokeWidth}
+          cornerRadius={3 / zoom}
+          shadowColor="rgba(14, 116, 144, 0.34)"
+          shadowBlur={hoveredHandle === handle.id ? 10 / zoom : 0}
+          shadowOpacity={hoveredHandle === handle.id ? 1 : 0}
+          shadowOffset={{ x: 0, y: 2 / zoom }}
+          draggable
+          onMouseEnter={(event) => {
+            setHoveredHandle(handle.id);
+            setStageCursor(event, cursorForFixedExpansionHandle(handle.id));
+          }}
+          onMouseLeave={(event) => {
+            setHoveredHandle(null);
+            setStageCursor(event, "default");
+          }}
+          onMouseDown={(event) => {
+            event.cancelBubble = true;
+            setHoveredHandle(handle.id);
+          }}
+          onDragMove={(event) => {
+            event.cancelBubble = true;
+            onResize(handle.id, {
+              x: event.target.x() + event.target.width() / 2,
+              y: event.target.y() + event.target.height() / 2,
+            });
+          }}
+          onDragEnd={(event) => {
+            event.cancelBubble = true;
+            setStageCursor(event, cursorForFixedExpansionHandle(handle.id));
+            onResize(handle.id, {
+              x: event.target.x() + event.target.width() / 2,
+              y: event.target.y() + event.target.height() / 2,
+            });
+          }}
+        />
+      ))}
+    </Group>
+  );
+}
+
+interface FixedExpansionPreviewState {
+  plan: HfSpaceFillExpansionPlan;
+  sourceBounds: DocumentBounds;
+  direction: GenerationParameters["outpaint_direction"];
+  overlapPercentage: number;
+  overlapSides: {
+    left: boolean;
+    right: boolean;
+    top: boolean;
+    bottom: boolean;
+  };
+  showGuides: boolean;
+}
+
+type FixedExpansionResizeHandle = "left" | "right" | "top" | "bottom" | "corner";
+
+function setStageCursor(
+  event: KonvaEventObject<MouseEvent | DragEvent>,
+  cursor: string,
+) {
+  const stage = event.target.getStage();
+  if (!stage) {
+    return;
+  }
+  stage.container().style.cursor = cursor;
+}
+
+function cursorForFixedExpansionHandle(handle: FixedExpansionResizeHandle): string {
+  if (handle === "left" || handle === "right") {
+    return "ew-resize";
+  }
+  if (handle === "top" || handle === "bottom") {
+    return "ns-resize";
+  }
+  return "nwse-resize";
+}
+
+function fixedResizeHandles(
+  preview: FixedExpansionPreviewState,
+  handleSize: number,
+): Array<{
+  id: FixedExpansionResizeHandle;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}> {
+  const bounds = preview.plan.selection;
+  const centerX = bounds.x + bounds.width / 2;
+  const centerY = bounds.y + bounds.height / 2;
+  const longSide = handleSize * 2.6;
+  if (preview.direction === OUTPAINT_DIRECTION_AROUND) {
+    return [
+      {
+        id: "right",
+        x: bounds.x + bounds.width - handleSize / 2,
+        y: centerY - longSide / 2,
+        width: handleSize,
+        height: longSide,
+      },
+      {
+        id: "bottom",
+        x: centerX - longSide / 2,
+        y: bounds.y + bounds.height - handleSize / 2,
+        width: longSide,
+        height: handleSize,
+      },
+      {
+        id: "corner",
+        x: bounds.x + bounds.width - handleSize / 2,
+        y: bounds.y + bounds.height - handleSize / 2,
+        width: handleSize,
+        height: handleSize,
+      },
+    ];
+  }
+  if (preview.direction === OUTPAINT_DIRECTION_LEFT) {
+    return [
+      {
+        id: "left",
+        x: bounds.x - handleSize / 2,
+        y: centerY - longSide / 2,
+        width: handleSize,
+        height: longSide,
+      },
+    ];
+  }
+  if (preview.direction === OUTPAINT_DIRECTION_UP) {
+    return [
+      {
+        id: "top",
+        x: centerX - longSide / 2,
+        y: bounds.y - handleSize / 2,
+        width: longSide,
+        height: handleSize,
+      },
+    ];
+  }
+  if (preview.direction === OUTPAINT_DIRECTION_DOWN) {
+    return [
+      {
+        id: "bottom",
+        x: centerX - longSide / 2,
+        y: bounds.y + bounds.height - handleSize / 2,
+        width: longSide,
+        height: handleSize,
+      },
+    ];
+  }
+  return [
+    {
+      id: "right",
+      x: bounds.x + bounds.width - handleSize / 2,
+      y: centerY - longSide / 2,
+      width: handleSize,
+      height: longSide,
+    },
+  ];
+}
+
+function updateFixedExpansionFromHandle(
+  preview: FixedExpansionPreviewState,
+  handle: FixedExpansionResizeHandle,
+  point: Point,
+  updateParameter: ReturnType<typeof useEditorStore.getState>["updateParameter"],
+) {
+  const source = preview.sourceBounds;
+  const sourceRight = source.x + source.width;
+  const sourceBottom = source.y + source.height;
+  const sourceCenterX = source.x + source.width / 2;
+  const sourceCenterY = source.y + source.height / 2;
+
+  if (preview.direction === OUTPAINT_DIRECTION_AROUND) {
+    if (handle === "right" || handle === "corner") {
+      updateParameter(
+        "fixed_expand_width_percent",
+        fixedExpandPercentFromSize(Math.abs(point.x - sourceCenterX) * 2, source.width),
+      );
+    }
+    if (handle === "bottom" || handle === "corner") {
+      updateParameter(
+        "fixed_expand_height_percent",
+        fixedExpandPercentFromSize(Math.abs(point.y - sourceCenterY) * 2, source.height),
+      );
+    }
+    return;
+  }
+
+  if (handle === "right") {
+    updateParameter(
+      "fixed_expand_percent",
+      fixedExpandPercentFromSize(point.x - source.x, source.width),
+    );
+    return;
+  }
+  if (handle === "left") {
+    updateParameter(
+      "fixed_expand_percent",
+      fixedExpandPercentFromSize(sourceRight - point.x, source.width),
+    );
+    return;
+  }
+  if (handle === "bottom") {
+    updateParameter(
+      "fixed_expand_percent",
+      fixedExpandPercentFromSize(point.y - source.y, source.height),
+    );
+    return;
+  }
+  if (handle === "top") {
+    updateParameter(
+      "fixed_expand_percent",
+      fixedExpandPercentFromSize(sourceBottom - point.y, source.height),
+    );
+  }
+}
+
+function fixedExpandPercentFromSize(size: number, sourceSize: number): number {
+  const rawPercent = (Math.max(1, size) / Math.max(1, sourceSize) - 1) * 100;
+  return Math.max(5, Math.min(300, Math.round(rawPercent)));
+}
+
+function fixedGeneratedRects(
+  bounds: DocumentBounds,
+  sourceRect: DocumentBounds,
+): DocumentBounds[] {
+  const source = intersectBounds(bounds, sourceRect);
+  if (!source) {
+    return [bounds];
+  }
+  return [
+    {
+      x: bounds.x,
+      y: bounds.y,
+      width: bounds.width,
+      height: source.y - bounds.y,
+    },
+    {
+      x: bounds.x,
+      y: source.y + source.height,
+      width: bounds.width,
+      height: bounds.y + bounds.height - (source.y + source.height),
+    },
+    {
+      x: bounds.x,
+      y: source.y,
+      width: source.x - bounds.x,
+      height: source.height,
+    },
+    {
+      x: source.x + source.width,
+      y: source.y,
+      width: bounds.x + bounds.width - (source.x + source.width),
+      height: source.height,
+    },
+  ].filter((rect) => rect.width > 0 && rect.height > 0);
+}
+
+function fixedOverlapRects(
+  source: DocumentBounds,
+  overlapPercentage: number,
+  sides: { left: boolean; right: boolean; top: boolean; bottom: boolean },
+): DocumentBounds[] {
+  const overlapX = Math.max(1, Math.round(source.width * (overlapPercentage / 100)));
+  const overlapY = Math.max(1, Math.round(source.height * (overlapPercentage / 100)));
+  return [
+    sides.left
+      ? { x: source.x, y: source.y, width: overlapX, height: source.height }
+      : null,
+    sides.right
+      ? {
+          x: source.x + source.width - overlapX,
+          y: source.y,
+          width: overlapX,
+          height: source.height,
+        }
+      : null,
+    sides.top
+      ? { x: source.x, y: source.y, width: source.width, height: overlapY }
+      : null,
+    sides.bottom
+      ? {
+          x: source.x,
+          y: source.y + source.height - overlapY,
+          width: source.width,
+          height: overlapY,
+        }
+      : null,
+  ].filter((rect): rect is DocumentBounds => Boolean(rect));
+}
+
+function intersectBounds(
+  first: DocumentBounds,
+  second: DocumentBounds,
+): DocumentBounds | null {
+  const x = Math.max(first.x, second.x);
+  const y = Math.max(first.y, second.y);
+  const right = Math.min(first.x + first.width, second.x + second.width);
+  const bottom = Math.min(first.y + first.height, second.y + second.height);
+  if (right <= x || bottom <= y) {
+    return null;
+  }
+  return { x, y, width: right - x, height: bottom - y };
+}
+
+function fixedExpansionPreview(
+  documentState: {
+    width: number;
+    height: number;
+    rasterDataUrl: string | null;
+    rasterBounds: DocumentBounds | null;
+    references: ReferenceImageLayer[];
+  },
+  parameters: GenerationParameters,
+): FixedExpansionPreviewState | null {
+  if (!documentState.rasterDataUrl && documentState.references.length === 0) {
+    return null;
+  }
+  const visibleBounds = documentState.rasterBounds ?? {
+    x: 0,
+    y: 0,
+    width: documentState.width,
+    height: documentState.height,
+  };
+  return {
+    plan: planHfSpaceFillExpansion(visibleBounds, {
+      direction: parameters.outpaint_direction,
+      generatedSize: parameters.outpaint_generated_size,
+      crossSize: parameters.outpaint_cross_size,
+      resizeOption: parameters.hf_space_resize_option,
+      customResizePercentage: parameters.hf_space_custom_resize_percentage,
+      overlapPercentage: parameters.hf_space_overlap_percentage,
+      overlapLeft: parameters.hf_space_overlap_left,
+      overlapRight: parameters.hf_space_overlap_right,
+      overlapTop: parameters.hf_space_overlap_top,
+      overlapBottom: parameters.hf_space_overlap_bottom,
+      expansionPercent: parameters.fixed_expand_percent,
+      widthExpansionPercent: parameters.fixed_expand_width_percent,
+      heightExpansionPercent: parameters.fixed_expand_height_percent,
+      outputScalePercent: fixedExpandOutputScalePercent(parameters),
+    }),
+    sourceBounds: visibleBounds,
+    direction: parameters.outpaint_direction,
+    overlapPercentage: parameters.hf_space_overlap_percentage,
+    overlapSides: {
+      left: parameters.hf_space_overlap_left,
+      right: parameters.hf_space_overlap_right,
+      top: parameters.hf_space_overlap_top,
+      bottom: parameters.hf_space_overlap_bottom,
+    },
+    showGuides: parameters.fixed_expand_show_guides,
+  };
+}
+
+function fixedExpandOutputScalePercent(parameters: GenerationParameters): number {
+  if (parameters.fixed_expand_output_scale === "safe") {
+    return 60;
+  }
+  if (parameters.fixed_expand_output_scale === "balanced") {
+    return 75;
+  }
+  if (parameters.fixed_expand_output_scale === "custom") {
+    return Math.max(25, Math.min(100, Math.round(parameters.fixed_expand_custom_output_scale)));
+  }
+  return 100;
 }
 
 function CanvasGrid() {
@@ -872,6 +1383,28 @@ function ResultControls({
       </Button>
     </div>
   );
+}
+
+function canvasFocusBounds(
+  rasterBounds: DocumentBounds,
+  selection: SelectionRect,
+): DocumentBounds {
+  const x = Math.min(rasterBounds.x, selection.x);
+  const y = Math.min(rasterBounds.y, selection.y);
+  const right = Math.max(
+    rasterBounds.x + rasterBounds.width,
+    selection.x + selection.width,
+  );
+  const bottom = Math.max(
+    rasterBounds.y + rasterBounds.height,
+    selection.y + selection.height,
+  );
+  return {
+    x,
+    y,
+    width: right - x,
+    height: bottom - y,
+  };
 }
 
 function JobProgressOverlay({

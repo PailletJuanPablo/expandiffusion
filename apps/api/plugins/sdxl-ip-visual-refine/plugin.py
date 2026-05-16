@@ -33,7 +33,7 @@ IP_ADAPTER_SUBFOLDER = "sdxl_models"
 IP_ADAPTER_WEIGHT = "ip-adapter-plus_sdxl_vit-h.safetensors"
 IP_ADAPTER_IMAGE_ENCODER_FOLDER = "models/image_encoder"
 
-DEFAULT_ENABLED = True
+DEFAULT_ENABLED = False
 DEFAULT_STRENGTH = 0.45
 DEFAULT_IP_SCALE = 0.45
 DEFAULT_STEPS = 12

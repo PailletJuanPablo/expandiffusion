@@ -5,6 +5,7 @@ import type {
   MaskStrokeMode,
   OutpaintDirection,
   OutpaintStrategy,
+  WorkspaceMode,
 } from '../constants/domain'
 
 export interface Point {
@@ -118,6 +119,12 @@ export interface GenerationParameters {
   hf_space_overlap_bottom: boolean
   hf_space_resize_option: string
   hf_space_custom_resize_percentage: number
+  fixed_expand_percent: number
+  fixed_expand_width_percent: number
+  fixed_expand_height_percent: number
+  fixed_expand_output_scale: string
+  fixed_expand_custom_output_scale: number
+  fixed_expand_show_guides: boolean
   loras: LoraConfig[]
   textual_inversions: TextualInversionConfig[]
 }
@@ -448,6 +455,7 @@ export interface EditorStoreState {
   controlGuideColor: string
   controlGuideStrength: number
   controlGuideMaskMode: ControlGuideMaskMode
+  workspaceMode: WorkspaceMode
   generationMode: GenerationMode
   selectedAdapterId: string
   modelSource: string

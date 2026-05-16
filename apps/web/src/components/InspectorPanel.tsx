@@ -23,8 +23,8 @@
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  ADAPTER_SDXL_INPAINT,
   ADAPTER_SDXL_FILL_CONTROLNET_UNION,
+  CONTROLNET_GUIDE_UI_ENABLED,
   CONTROL_GUIDE_MASK_MODE_OPTIONS,
   CONTROL_GUIDE_COLORS,
   DIRECTIONAL_OUTPAINT_MIN_SIZE,
@@ -46,12 +46,15 @@ import {
   TOOL_OUTPAINT_FRAME,
   TOOL_PAN,
   TOOL_SELECT,
+  WORKSPACE_MODE_EXPAND_IMAGE,
+  WORKSPACE_MODE_FREE_EDIT,
   PLUGIN_TOOL_TARGET_IMAGE,
   pluginToolIdFromEditorTool,
   type ControlGuideMaskMode,
   type EditorTool,
   type GenerationMode,
   type OutpaintStrategy,
+  type WorkspaceMode,
 } from "../constants/domain";
 import { useMutation } from "@tanstack/react-query";
 import type {
@@ -69,22 +72,38 @@ import type {
 import { useModelLoader } from "../hooks/useModelLoader";
 import { useOutpaintJob } from "../hooks/useOutpaintJob";
 import { useStudioQueries } from "../hooks/useStudioQueries";
-import { runPluginAction, unloadModel } from "../lib/apiClient";
+import {
+  disablePlugin,
+  enablePlugin,
+  runPluginAction,
+  unloadModel,
+} from "../lib/apiClient";
 import { renderPluginActionInput } from "../lib/canvasRender";
 import {
   adapterIdForControlGuideMode,
   controlnetModelIdForAdapter,
+  controlnetModelIdForAdapterValue,
 } from "../lib/controlGuideMode";
+import { controlOptionDetailsFor } from "../lib/controlHelp";
 import {
   isModelSourceReady,
   type ModelSourceValues,
 } from "../lib/modelSources";
+import {
+  ONBOARDING_TARGET_GENERATE_BUTTON,
+  ONBOARDING_TARGET_PROMPT,
+  ONBOARDING_TARGET_SETUP_BUTTON,
+  ONBOARDING_TARGET_TOPBAR_MODEL,
+} from "../lib/onboardingTour";
+import { adapterIdForWorkspaceMode, isExpandImageAdapter } from "../lib/workspaceMode";
 import { useEditorStore } from "../store/editorStore";
 import { CorrectionPipelineSection } from "./CorrectionPipelineSection";
 import { GenerationControls } from "./GenerationControls";
 import { ModelSetupDialog } from "./ModelSetupDialog";
 import { NumberStepper } from "./NumberStepper";
+import { OnboardingTour } from "./OnboardingTour";
 import { SchemaControl } from "./SchemaControl";
+import { SelectControl } from "./SelectControl";
 import { Button } from "./ui/button";
 import { Progress } from "./ui/progress";
 import { ScrollArea } from "./ui/scroll-area";
@@ -95,20 +114,65 @@ interface ToolContext {
   icon: LucideIcon;
 }
 
-const ADAPTER_SDXL_FILL_IP_REFINE = "sdxl-fill-ip-refine";
-const SCRIBBLE_MODEL_FRAGMENT = "scribble";
+const CONTROL_GUIDE_DISABLED_ADAPTERS = new Set([
+  ADAPTER_SDXL_FILL_CONTROLNET_UNION,
+  "sdxl-fill-ip-refine",
+]);
+
+const WORKFLOW_CONTROL_IDS = new Set([
+  "outpaint_direction",
+  "outpaint_generated_size",
+  "outpaint_context_size",
+  "outpaint_cross_size",
+  "hf_space_resize_option",
+  "hf_space_custom_resize_percentage",
+  "hf_space_overlap_percentage",
+  "hf_space_overlap_left",
+  "hf_space_overlap_right",
+  "hf_space_overlap_top",
+  "hf_space_overlap_bottom",
+]);
+
+const FREE_EDIT_WORKFLOW_CONTROL_IDS = new Set([
+  "outpaint_direction",
+  "outpaint_generated_size",
+  "outpaint_context_size",
+  "outpaint_cross_size",
+  "hf_space_resize_option",
+  "hf_space_custom_resize_percentage",
+  "hf_space_overlap_left",
+  "hf_space_overlap_right",
+  "hf_space_overlap_top",
+  "hf_space_overlap_bottom",
+]);
+
+const FREE_EDIT_OUTPAINT_STRATEGY_OPTIONS = OUTPAINT_STRATEGY_OPTIONS.filter(
+  (option) =>
+    option.id !== OUTPAINT_STRATEGY_DIRECTIONAL &&
+    option.id !== OUTPAINT_STRATEGY_HF_SPACE_FILL,
+);
+
+const FIXED_EXPAND_RENDER_SCALE_OPTIONS = [
+  { id: "full", label: "Full" },
+  { id: "balanced", label: "Balanced" },
+  { id: "safe", label: "Safe" },
+  { id: "custom", label: "Custom" },
+];
 
 export function InspectorPanel() {
   const [setupOpen, setSetupOpen] = useState(false);
   const [panelCollapsed, setPanelCollapsed] = useState(false);
   const [loraText, setLoraText] = useState("");
   const [textualInversionText, setTextualInversionText] = useState("");
+  const activeModelSelectionSynced = useRef(false);
 
   const {
     runtimeQuery,
     adaptersQuery,
     modelsQuery,
     persistentStateQuery,
+    pluginsQuery,
+    pluginActionsQuery,
     pluginToolsQuery,
   } = useStudioQueries();
 
@@ -123,6 +187,7 @@ export function InspectorPanel() {
   const dtype = useEditorStore((state) => state.dtype);
   const parameters = useEditorStore((state) => state.parameters);
   const currentJob = useEditorStore((state) => state.currentJob);
+  const pendingResults = useEditorStore((state) => state.pendingResults);
   const brushSize = useEditorStore((state) => state.brushSize);
   const eraserHardness = useEditorStore((state) => state.eraserHardness);
   const controlGuideEnabled = useEditorStore(
@@ -136,6 +201,7 @@ export function InspectorPanel() {
     (state) => state.controlGuideMaskMode,
   );
   const controlnetModelId = useEditorStore((state) => state.controlnetModelId);
+  const workspaceMode = useEditorStore((state) => state.workspaceMode);
   const generationMode = useEditorStore((state) => state.generationMode);
   const tool = useEditorStore((state) => state.tool);
   const canvasSelectionTarget = useEditorStore(
@@ -155,9 +221,6 @@ export function InspectorPanel() {
   const setDtype = useEditorStore((state) => state.setDtype);
   const setGenerationMode = useEditorStore((state) => state.setGenerationMode);
   const updateParameter = useEditorStore((state) => state.updateParameter);
-  const applyDirectionalOutpaintPreset = useEditorStore(
-    (state) => state.applyDirectionalOutpaintPreset,
-  );
   const setSelection = useEditorStore((state) => state.setSelection);
   const setBrushSize = useEditorStore((state) => state.setBrushSize);
   const setEraserHardness = useEditorStore(
@@ -178,6 +241,7 @@ export function InspectorPanel() {
   const setControlnetModelId = useEditorStore(
     (state) => state.setControlnetModelId,
   );
+  const setWorkspaceMode = useEditorStore((state) => state.setWorkspaceMode);
   const clearMask = useEditorStore((state) => state.clearMask);
   const clearControlGuide = useEditorStore((state) => state.clearControlGuide);
   const updateRasterDataUrl = useEditorStore(
@@ -210,7 +274,11 @@ export function InspectorPanel() {
     pluginTools.find((pluginTool) => pluginTool.id === activePluginToolId) ??
     null;
   const toolContext = getToolContext(tool, activePluginTool);
+  const expandImageActive = workspaceMode === WORKSPACE_MODE_EXPAND_IMAGE;
+  const expandImageAdapterActive = isExpandImageAdapter(selectedAdapterId);
+  const generationToolPanelActive = !activePluginTool;
   const selectFrameActive =
+    workspaceMode === WORKSPACE_MODE_FREE_EDIT &&
     tool === TOOL_SELECT &&
     generationMode === GENERATION_MODE_OUTPAINT &&
     canvasSelectionTarget.kind === "frame";
@@ -220,11 +288,18 @@ export function InspectorPanel() {
   const hfSpaceFillActive =
     generationMode === GENERATION_MODE_OUTPAINT &&
     parameters.outpaint_strategy === OUTPAINT_STRATEGY_HF_SPACE_FILL;
+  const controlGuideDisabledForAdapter =
+    expandImageActive || CONTROL_GUIDE_DISABLED_ADAPTERS.has(selectedAdapterId);
+  const controlGuideUnavailable =
+    !CONTROLNET_GUIDE_UI_ENABLED || controlGuideDisabledForAdapter;
+  const controlGuideAvailable = !controlGuideUnavailable;
   const generationPanelActive =
-    tool === TOOL_OUTPAINT_FRAME ||
-    tool === TOOL_INPAINT_MASK ||
-    tool === TOOL_CONTROL_GUIDE ||
-    selectFrameActive;
+    generationToolPanelActive &&
+    (expandImageActive ||
+      tool === TOOL_OUTPAINT_FRAME ||
+      tool === TOOL_INPAINT_MASK ||
+      (CONTROLNET_GUIDE_UI_ENABLED && tool === TOOL_CONTROL_GUIDE) ||
+      selectFrameActive);
   const inspectorClassName = panelCollapsed
     ? "inspector-panel inspector-panel-collapsed"
     : generationPanelActive
@@ -243,9 +318,17 @@ export function InspectorPanel() {
     sourceValues,
   );
   const generationActionLabel =
-    generationMode === GENERATION_MODE_INPAINT
+    expandImageActive
+      ? "Expand image"
+      : generationMode === GENERATION_MODE_INPAINT
       ? "Generate inpaint"
       : "Generate outpaint";
+  const hiddenGenerationControlIds =
+    expandImageActive || directionalOutpaintActive
+      ? WORKFLOW_CONTROL_IDS
+      : generationMode === GENERATION_MODE_OUTPAINT
+        ? FREE_EDIT_WORKFLOW_CONTROL_IDS
+      : undefined;
   const controlGuideTargetAdapterId = adapterIdForControlGuideMode(
     true,
     selectedAdapterId,
@@ -255,11 +338,10 @@ export function InspectorPanel() {
     selectedAdapter?.capabilities.controlnet || controlGuideTargetAdapterId
       ? "ControlNet sketch"
       : "Native sketch";
-  const binaryScribbleGuideActive =
-    generationMode === GENERATION_MODE_INPAINT &&
-    (selectedAdapterId === ADAPTER_SDXL_FILL_CONTROLNET_UNION ||
-      selectedAdapterId === ADAPTER_SDXL_FILL_IP_REFINE ||
-      controlnetModelId.toLowerCase().includes(SCRIBBLE_MODEL_FRAGMENT));
+  const effectiveControlnetModelId = controlnetModelIdForAdapterValue(
+    selectedAdapter,
+    controlnetModelId,
+  );
 
   const selectAdapterById = (adapterId: string) => {
     const adapter = adapters.find((item) => item.id === adapterId);
@@ -274,19 +356,35 @@ export function InspectorPanel() {
   };
 
   const setOutpaintStrategy = (strategy: OutpaintStrategy) => {
-    if (strategy === OUTPAINT_STRATEGY_DIRECTIONAL) {
-      selectAdapterById(ADAPTER_SDXL_INPAINT);
-      applyDirectionalOutpaintPreset();
-      return;
-    }
-    if (strategy === OUTPAINT_STRATEGY_HF_SPACE_FILL) {
-      selectAdapterById(ADAPTER_SDXL_FILL_CONTROLNET_UNION);
+    if (
+      strategy === OUTPAINT_STRATEGY_DIRECTIONAL ||
+      strategy === OUTPAINT_STRATEGY_HF_SPACE_FILL
+    ) {
       return;
     }
     updateParameter("outpaint_strategy", strategy);
   };
 
+  const changeWorkspaceMode = (mode: WorkspaceMode) => {
+    if (mode !== WORKSPACE_MODE_EXPAND_IMAGE) {
+      setWorkspaceMode(mode);
+      return;
+    }
+    const adapterId = adapterIdForWorkspaceMode(mode, selectedAdapterId, adapters);
+    if (adapterId !== selectedAdapterId) {
+      selectAdapterById(adapterId);
+    }
+    setWorkspaceMode(mode);
+  };
+
   const setControlGuideMode = (enabled: boolean) => {
+    if (!CONTROLNET_GUIDE_UI_ENABLED) {
+      setControlGuideEnabled(false);
+      if (tool === TOOL_CONTROL_GUIDE) {
+        setGenerationMode(generationMode);
+      }
+      return;
+    }
     setControlGuideEnabled(enabled);
     const adapterId = adapterIdForControlGuideMode(
       enabled,
@@ -311,6 +409,58 @@ export function InspectorPanel() {
     }
   };
 
+  useEffect(() => {
+    if (
+      activeModelSelectionSynced.current ||
+      !activeModel ||
+      adapters.length === 0
+    ) {
+      return;
+    }
+    activeModelSelectionSynced.current = true;
+    if (activeModel.adapter_id === selectedAdapterId) {
+      return;
+    }
+    const adapter = adapters.find((item) => item.id === activeModel.adapter_id);
+    if (!adapter) {
+      return;
+    }
+    setSelectedAdapterId(
+      adapter.id,
+      activeModel.model_id ?? adapter.default_model_id,
+      adapter.generation_defaults,
+    );
+  }, [activeModel, adapters, selectedAdapterId, setSelectedAdapterId]);
+
+  useEffect(() => {
+    if (!controlGuideUnavailable) {
+      return;
+    }
+    if (controlGuideEnabled) {
+      setControlGuideEnabled(false);
+    }
+    if (tool === TOOL_CONTROL_GUIDE) {
+      setGenerationMode(generationMode);
+    }
+  }, [
+    controlGuideEnabled,
+    controlGuideUnavailable,
+    generationMode,
+    setControlGuideEnabled,
+    setGenerationMode,
+    tool,
+  ]);
+
+  useEffect(() => {
+    if (expandImageActive && !expandImageAdapterActive) {
+      setWorkspaceMode(WORKSPACE_MODE_FREE_EDIT);
+    }
+  }, [
+    expandImageActive,
+    expandImageAdapterActive,
+    setWorkspaceMode,
+  ]);
+
   const loadMutation = useModelLoader({
     selectedAdapterId,
     selectedAdapter,
@@ -319,7 +469,7 @@ export function InspectorPanel() {
     device,
     dtype,
     safetyChecker: Boolean(parameters.safety_checker),
-    controlnetModelId,
+    controlnetModelId: effectiveControlnetModelId,
     loraText,
     textualInversionText,
     onLoaded: async () => {
@@ -357,6 +507,61 @@ export function InspectorPanel() {
     },
   });
 
+  const pluginMutation = useMutation({
+    mutationFn: ({ pluginId, enabled }: { pluginId: string; enabled: boolean }) =>
+      enabled ? enablePlugin(pluginId) : disablePlugin(pluginId),
+    onSuccess: async () => {
+      await pluginsQuery.refetch();
+      await adaptersQuery.refetch();
+      await pluginActionsQuery.refetch();
+      await pluginToolsQuery.refetch();
+      await modelsQuery.refetch();
+      await persistentStateQuery.refetch();
+    },
+    onError: (error) => {
+      setErrorMessage(
+        error instanceof Error ? error.message : "Plugin update failed.",
+      );
+    },
+  });
+
+  const onboardingProgress = {
+    modelLoaded,
+    modelLoading: loadMutation.isPending,
+    imageLoaded: Boolean(documentState.rasterDataUrl),
+    outpaintReady:
+      modelLoaded &&
+      Boolean(documentState.rasterDataUrl) &&
+      workspaceMode === WORKSPACE_MODE_FREE_EDIT &&
+      generationMode === GENERATION_MODE_OUTPAINT,
+    generationStarted:
+      Boolean(currentJob) || pendingResults.length > 0 || generateMutation.isPending,
+  };
+  const onboardingGenerationDisabled =
+    !modelLoaded ||
+    !documentState.rasterDataUrl ||
+    running ||
+    generateMutation.isPending;
+  const startOnboardingModelLoad = () => {
+    setSetupOpen(true);
+    if (!sourceReady || loadMutation.isPending || modelLoaded) {
+      return;
+    }
+    loadMutation.mutate();
+  };
+  const useOnboardingOutpaint = () => {
+    setPanelCollapsed(false);
+    setWorkspaceMode(WORKSPACE_MODE_FREE_EDIT);
+    setGenerationMode(GENERATION_MODE_OUTPAINT);
+    setTool(TOOL_OUTPAINT_FRAME);
+  };
+  const generateFromOnboarding = () => {
+    if (onboardingGenerationDisabled) {
+      return;
+    }
+    generateMutation.mutate();
+  };
+
   return (
     <>
       <header className="studio-topbar">
@@ -364,10 +569,10 @@ export function InspectorPanel() {
           <span className="topbar-label">Project</span>
           <strong>{documentState.id.slice(0, 8)}</strong>
         </div>
-        <div className="topbar-model">
-          <span className="topbar-label">Model</span>
+        <div className="topbar-model" data-tour-id={ONBOARDING_TARGET_TOPBAR_MODEL}>
+          <span className="topbar-label">Profile</span>
           <strong>
-            {selectedAdapterId}
+            {selectedAdapter?.label ?? selectedAdapterId}
             <span
               className={modelLoaded ? "topbar-ready-dot" : "topbar-idle-dot"}
             />
@@ -379,6 +584,7 @@ export function InspectorPanel() {
             type="button"
             variant="secondary"
             size="compact"
+            data-tour-id={ONBOARDING_TARGET_SETUP_BUTTON}
             onClick={() => setSetupOpen(true)}
           >
             <Settings2 size={16} />
@@ -389,6 +595,7 @@ export function InspectorPanel() {
             variant="primary"
             size="compact"
             className="topbar-generate-button"
+            data-tour-id={ONBOARDING_TARGET_GENERATE_BUTTON}
             disabled={!modelLoaded || running || generateMutation.isPending}
             onClick={() => generateMutation.mutate()}
           >
@@ -414,7 +621,11 @@ export function InspectorPanel() {
               <ChevronLeft size={16} />
             </Button>
             <div className="collapsed-inspector-content">
-              <toolContext.icon size={19} />
+              {expandImageActive && generationToolPanelActive ? (
+                <Frame size={19} />
+              ) : (
+                <toolContext.icon size={19} />
+              )}
               {generationPanelActive ? (
                 <Button
                   type="button"
@@ -446,8 +657,16 @@ export function InspectorPanel() {
           <>
             <div className="inspector-panel-header">
               <div className="tool-panel-header">
-                <toolContext.icon size={17} />
-                <strong>{toolContext.title}</strong>
+                {expandImageActive && generationToolPanelActive ? (
+                  <Frame size={17} />
+                ) : (
+                  <toolContext.icon size={17} />
+                )}
+                <strong>
+                  {expandImageActive && generationToolPanelActive
+                    ? "Expand image"
+                    : toolContext.title}
+                </strong>
               </div>
               <Button
                 type="button"
@@ -481,12 +700,15 @@ export function InspectorPanel() {
                       controlGuideEnabled={controlGuideEnabled}
                       controlGuideLabel={controlGuideLabel}
                       hfSpaceFillActive={hfSpaceFillActive}
-                      onGenerationModeChange={setGenerationMode}
+                      controlGuideAvailable={controlGuideAvailable}
+                      onWorkspaceModeChange={changeWorkspaceMode}
                       onOutpaintStrategyChange={setOutpaintStrategy}
                       onParameterChange={updateParameter}
                       onControlGuideEnabledChange={setControlGuideMode}
+                      workspaceMode={workspaceMode}
+                      fixedExpandAvailable={expandImageAdapterActive}
                     />
-                    {directionalOutpaintActive ? null : (
+                    {expandImageActive || directionalOutpaintActive ? null : (
                       <ToolContextSections
                         tool={tool}
                         generationMode={generationMode}
@@ -496,7 +718,6 @@ export function InspectorPanel() {
                         brushSize={brushSize}
                         eraserHardness={eraserHardness}
                         controlGuideColor={controlGuideColor}
-                        controlGuideBinary={binaryScribbleGuideActive}
                         controlGuideStrength={controlGuideStrength}
                         controlGuideMaskMode={controlGuideMaskMode}
                         onSelectionChange={setSelection}
@@ -509,17 +730,20 @@ export function InspectorPanel() {
                         onClearControlGuide={clearControlGuide}
                       />
                     )}
-                    <GenerationControls
-                      controls={selectedAdapter?.generation_controls ?? []}
-                      loadControls={selectedAdapter?.load_controls ?? []}
-                      generationMode={generationMode}
-                      parameters={parameters}
-                      loraText={loraText}
-                      textualInversionText={textualInversionText}
-                      onParameterChange={updateParameter}
-                      onLoraTextChange={setLoraText}
-                      onTextualInversionTextChange={setTextualInversionText}
-                    />
+                    <div data-tour-id={ONBOARDING_TARGET_PROMPT}>
+                      <GenerationControls
+                        controls={selectedAdapter?.generation_controls ?? []}
+                        loadControls={selectedAdapter?.load_controls ?? []}
+                        generationMode={generationMode}
+                        parameters={parameters}
+                        loraText={loraText}
+                        textualInversionText={textualInversionText}
+                        hiddenControlIds={hiddenGenerationControlIds}
+                        onParameterChange={updateParameter}
+                        onLoraTextChange={setLoraText}
+                        onTextualInversionTextChange={setTextualInversionText}
+                      />
+                    </div>
                   </TabsContent>
                   <TabsContent value="workflow">
                     <CorrectionPipelineSection
@@ -555,7 +779,6 @@ export function InspectorPanel() {
                       brushSize={brushSize}
                       eraserHardness={eraserHardness}
                       controlGuideColor={controlGuideColor}
-                      controlGuideBinary={binaryScribbleGuideActive}
                       controlGuideStrength={controlGuideStrength}
                       controlGuideMaskMode={controlGuideMaskMode}
                       onSelectionChange={setSelection}
@@ -642,7 +865,7 @@ export function InspectorPanel() {
           sourceValues={sourceValues}
           device={device}
           dtype={dtype}
-          controlnetModelId={controlnetModelId}
+          controlnetModelId={effectiveControlnetModelId}
           safetyChecker={Boolean(parameters.safety_checker)}
           loraText={loraText}
           textualInversionText={textualInversionText}
@@ -652,14 +875,27 @@ export function InspectorPanel() {
           loadDisabled={!sourceReady}
           unloading={unloadMutation.isPending}
           cancelPending={loadMutation.cancelPending}
+          plugins={pluginsQuery.data ?? []}
+          pluginControls={selectedAdapter?.generation_controls ?? []}
+          pluginPostprocessors={selectedAdapter?.postprocessors ?? []}
+          parameters={parameters}
+          pendingPluginId={
+            pluginMutation.isPending && pluginMutation.variables
+              ? pluginMutation.variables.pluginId
+              : null
+          }
           onClose={() => setSetupOpen(false)}
           onAdapterChange={(adapterId) => {
             const adapter = adapters.find((item) => item.id === adapterId);
+            const adapterControlnetModelId = controlnetModelIdForAdapter(adapter);
             setSelectedAdapterId(
               adapterId,
               adapter?.default_model_id ?? null,
               adapter?.generation_defaults,
             );
+            if (adapterControlnetModelId) {
+              setControlnetModelId(adapterControlnetModelId);
+            }
           }}
           onModelSourceChange={setModelSource}
           onModelIdChange={setModelId}
@@ -681,9 +917,77 @@ export function InspectorPanel() {
             }
           }}
           onCancelLoad={loadMutation.cancelLoad}
+          onPluginToggle={(plugin) =>
+            pluginMutation.mutate({
+              pluginId: plugin.id,
+              enabled: !plugin.enabled,
+            })
+          }
+          onParameterChange={updateParameter}
         />
       ) : null}
+      <OnboardingTour
+        progress={onboardingProgress}
+        modelSetupOpen={setupOpen}
+        modelLoadProgress={loadMutation.loadProgress}
+        imageBounds={documentState.rasterBounds}
+        outpaintFrame={documentState.selection}
+        viewport={viewport}
+        modelLoadDisabled={!sourceReady}
+        generationDisabled={onboardingGenerationDisabled}
+        onOpenSetup={() => setSetupOpen(true)}
+        onLoadModel={startOnboardingModelLoad}
+        onUseOutpaint={useOnboardingOutpaint}
+        onGenerate={generateFromOnboarding}
+      />
     </>
+  );
+}
+
+function OutpaintMethodSwitch({
+  value,
+  fixedExpandAvailable,
+  onChange,
+}: {
+  value: WorkspaceMode;
+  fixedExpandAvailable: boolean;
+  onChange: (mode: WorkspaceMode) => void;
+}) {
+  return (
+    <div className="outpaint-method-switch" aria-label="Outpaint method">
+      <button
+        type="button"
+        className={
+          value === WORKSPACE_MODE_FREE_EDIT
+            ? "outpaint-method-option outpaint-method-option-active"
+            : "outpaint-method-option"
+        }
+        aria-pressed={value === WORKSPACE_MODE_FREE_EDIT}
+        onClick={() => onChange(WORKSPACE_MODE_FREE_EDIT)}
+      >
+        <Paintbrush size={15} />
+        <span>Free frame</span>
+      </button>
+      <button
+        type="button"
+        className={
+          value === WORKSPACE_MODE_EXPAND_IMAGE
+            ? "outpaint-method-option outpaint-method-option-active"
+            : "outpaint-method-option"
+        }
+        aria-pressed={value === WORKSPACE_MODE_EXPAND_IMAGE}
+        disabled={!fixedExpandAvailable}
+        title={
+          fixedExpandAvailable
+            ? "Use fixed SDXL Fill expansion."
+            : "Load the SDXL Fill profile to use fixed expansion."
+        }
+        onClick={() => onChange(WORKSPACE_MODE_EXPAND_IMAGE)}
+      >
+        <Frame size={15} />
+        <span>Fixed expand</span>
+      </button>
+    </div>
   );
 }
 
@@ -1103,106 +1407,249 @@ function pluginToolControlValue(
 }
 
 function GenerationWorkflowSection({
+  workspaceMode,
   generationMode,
   outpaintStrategy,
   parameters,
   controlGuideEnabled,
   controlGuideLabel,
   hfSpaceFillActive,
-  onGenerationModeChange,
+  controlGuideAvailable,
+  onWorkspaceModeChange,
   onOutpaintStrategyChange,
   onParameterChange,
   onControlGuideEnabledChange,
+  fixedExpandAvailable,
 }: {
+  workspaceMode: WorkspaceMode;
   generationMode: GenerationMode;
   outpaintStrategy: OutpaintStrategy;
   parameters: GenerationParameters;
   controlGuideEnabled: boolean;
   controlGuideLabel: string;
   hfSpaceFillActive: boolean;
-  onGenerationModeChange: (mode: GenerationMode) => void;
+  controlGuideAvailable: boolean;
+  onWorkspaceModeChange: (mode: WorkspaceMode) => void;
   onOutpaintStrategyChange: (strategy: OutpaintStrategy) => void;
   onParameterChange: <TKey extends keyof GenerationParameters>(
     key: TKey,
     value: GenerationParameters[TKey],
   ) => void;
   onControlGuideEnabledChange: (enabled: boolean) => void;
+  fixedExpandAvailable: boolean;
 }) {
+  const expandImageActive = workspaceMode === WORKSPACE_MODE_EXPAND_IMAGE;
   const directionalActive =
     generationMode === GENERATION_MODE_OUTPAINT &&
     outpaintStrategy === OUTPAINT_STRATEGY_DIRECTIONAL;
-  const guideDisabled = directionalActive || hfSpaceFillActive;
+  const guideDisabled =
+    expandImageActive || directionalActive || hfSpaceFillActive || !controlGuideAvailable;
   const guideEnabled = controlGuideEnabled && !guideDisabled;
+  const guideDescription = guideDisabled
+    ? "Guide input is already handled by the active mode."
+    : "Optional sketch input that steers the generated area without switching tools.";
   return (
     <section className="panel-section generation-workflow-section">
       <div className="section-heading">
-        <span>Edit area</span>
-      </div>
-      <div className="workflow-segmented-control" aria-label="Edit area">
-        <button
-          type="button"
-          className={
-            generationMode === GENERATION_MODE_OUTPAINT
-              ? "workflow-option workflow-option-active"
-              : "workflow-option"
-          }
-          aria-pressed={generationMode === GENERATION_MODE_OUTPAINT}
-          onClick={() => onGenerationModeChange(GENERATION_MODE_OUTPAINT)}
-        >
-          <Frame size={15} />
-          Outpaint frame
-        </button>
-        <button
-          type="button"
-          className={
-            generationMode === GENERATION_MODE_INPAINT
-              ? "workflow-option workflow-option-active"
-              : "workflow-option"
-          }
-          aria-pressed={generationMode === GENERATION_MODE_INPAINT}
-          onClick={() => onGenerationModeChange(GENERATION_MODE_INPAINT)}
-        >
-          <Paintbrush size={15} />
-          Inpaint mask
-        </button>
+        <span>{expandImageActive ? "Expansion mode" : "Active tool"}</span>
       </div>
       {generationMode === GENERATION_MODE_OUTPAINT ? (
-        <>
-          <label className="field-label">
-            Outpaint strategy
-            <select
-              value={outpaintStrategy}
-              onChange={(event) =>
-                onOutpaintStrategyChange(event.target.value as OutpaintStrategy)
+        <OutpaintMethodSwitch
+          value={workspaceMode}
+          fixedExpandAvailable={fixedExpandAvailable}
+          onChange={onWorkspaceModeChange}
+        />
+      ) : null}
+      {expandImageActive ? (
+        <div className="expand-image-controls">
+          <div className="expand-direction-grid" aria-label="Expansion direction">
+            {OUTPAINT_DIRECTION_OPTIONS.map((option) => (
+              <button
+                key={option.id}
+                type="button"
+                className={
+                  parameters.outpaint_direction === option.id
+                    ? "expand-direction-option expand-direction-option-active"
+                    : "expand-direction-option"
+                }
+                aria-pressed={parameters.outpaint_direction === option.id}
+                onClick={() =>
+                  onParameterChange(
+                    "outpaint_direction",
+                    option.id as GenerationParameters["outpaint_direction"],
+                  )
+                }
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+          {parameters.outpaint_direction === "around" ? (
+            <div className="expand-size-grid">
+              <SliderField
+                label="Width growth"
+                value={parameters.fixed_expand_width_percent}
+                min={5}
+                max={200}
+                step={5}
+                valueSuffix="%"
+                onChange={(value) =>
+                  onParameterChange("fixed_expand_width_percent", value)
+                }
+              />
+              <SliderField
+                label="Height growth"
+                value={parameters.fixed_expand_height_percent}
+                min={5}
+                max={200}
+                step={5}
+                valueSuffix="%"
+                onChange={(value) =>
+                  onParameterChange("fixed_expand_height_percent", value)
+                }
+              />
+            </div>
+          ) : (
+            <SliderField
+              label="New area"
+              value={parameters.fixed_expand_percent}
+              min={5}
+              max={200}
+              step={5}
+              valueSuffix="%"
+              onChange={(value) =>
+                onParameterChange("fixed_expand_percent", value)
               }
-            >
-              {OUTPAINT_STRATEGY_OPTIONS.map((option) => (
-                <option key={option.id} value={option.id}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          {directionalActive ? (
-            <div className="directional-outpaint-controls">
-              <label className="field-label">
-                Direction
-                <select
-                  value={parameters.outpaint_direction}
-                  onChange={(event) =>
-                    onParameterChange(
-                      "outpaint_direction",
-                      event.target.value as GenerationParameters["outpaint_direction"],
-                    )
+            />
+          )}
+          <SliderField
+            label="Overlap"
+            value={parameters.hf_space_overlap_percentage}
+            min={1}
+            max={50}
+            step={1}
+            valueSuffix="%"
+            onChange={(value) =>
+              onParameterChange("hf_space_overlap_percentage", value)
+            }
+          />
+          <div className="render-scale-field">
+            <div className="label-row">
+              <span>Render scale</span>
+              <strong>{fixedExpandScaleLabel(parameters)}</strong>
+            </div>
+            <div className="render-scale-grid" aria-label="Render scale">
+              {FIXED_EXPAND_RENDER_SCALE_OPTIONS.map((option) => (
+                <button
+                  key={option.id}
+                  type="button"
+                  className={
+                    parameters.fixed_expand_output_scale === option.id
+                      ? "workflow-option workflow-option-active"
+                      : "workflow-option"
+                  }
+                  aria-pressed={parameters.fixed_expand_output_scale === option.id}
+                  onClick={() =>
+                    onParameterChange("fixed_expand_output_scale", option.id)
                   }
                 >
-                  {OUTPAINT_DIRECTION_OPTIONS.map((option) => (
-                    <option key={option.id} value={option.id}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          {parameters.fixed_expand_output_scale === "custom" ? (
+            <SliderField
+              label="Custom scale"
+              value={parameters.fixed_expand_custom_output_scale}
+              min={25}
+              max={100}
+              step={5}
+              valueSuffix="%"
+              onChange={(value) =>
+                onParameterChange("fixed_expand_custom_output_scale", value)
+              }
+            />
+          ) : null}
+          <div className="fixed-expand-toggle-row">
+            <span>Preview guides</span>
+            <OverlapToggle
+              label={parameters.fixed_expand_show_guides ? "On" : "Off"}
+              checked={parameters.fixed_expand_show_guides}
+              onChange={(value) =>
+                onParameterChange("fixed_expand_show_guides", value)
+              }
+            />
+          </div>
+          <div className="expand-overlap-grid" aria-label="Overlap sides">
+            <OverlapToggle
+              label="Left"
+              checked={parameters.hf_space_overlap_left}
+              onChange={(value) =>
+                onParameterChange("hf_space_overlap_left", value)
+              }
+            />
+            <OverlapToggle
+              label="Right"
+              checked={parameters.hf_space_overlap_right}
+              onChange={(value) =>
+                onParameterChange("hf_space_overlap_right", value)
+              }
+            />
+            <OverlapToggle
+              label="Top"
+              checked={parameters.hf_space_overlap_top}
+              onChange={(value) =>
+                onParameterChange("hf_space_overlap_top", value)
+              }
+            />
+            <OverlapToggle
+              label="Bottom"
+              checked={parameters.hf_space_overlap_bottom}
+              onChange={(value) =>
+                onParameterChange("hf_space_overlap_bottom", value)
+              }
+            />
+          </div>
+        </div>
+      ) : generationMode === GENERATION_MODE_OUTPAINT ? (
+        <>
+          {fixedExpandAvailable && !directionalActive ? (
+            <SliderField
+              label="Overlap"
+              value={Math.max(parameters.hf_space_overlap_percentage, 20)}
+              min={20}
+              max={50}
+              step={1}
+              valueSuffix="%"
+              onChange={(value) =>
+                onParameterChange("hf_space_overlap_percentage", value)
+              }
+            />
+          ) : null}
+          {!hfSpaceFillActive ? (
+            <SelectControl
+              label="Frame context"
+              value={outpaintStrategy}
+              options={FREE_EDIT_OUTPAINT_STRATEGY_OPTIONS}
+              optionDetails={controlOptionDetailsFor("outpaint_strategy")}
+              onChange={(value) => onOutpaintStrategyChange(value as OutpaintStrategy)}
+            />
+          ) : null}
+          {directionalActive ? (
+            <div className="directional-outpaint-controls">
+              <SelectControl
+                label="Direction"
+                value={parameters.outpaint_direction}
+                options={OUTPAINT_DIRECTION_OPTIONS}
+                optionDetails={controlOptionDetailsFor("outpaint_direction")}
+                onChange={(value) =>
+                  onParameterChange(
+                    "outpaint_direction",
+                    value as GenerationParameters["outpaint_direction"],
+                  )
+                }
+              />
               <label className="field-label">
                 Generated size
                 <input
@@ -1217,6 +1664,9 @@ function GenerationWorkflowSection({
                     )
                   }
                 />
+                <span className="control-help-text">
+                  Pixels generated along the chosen direction.
+                </span>
               </label>
               <label className="field-label">
                 Context
@@ -1232,6 +1682,9 @@ function GenerationWorkflowSection({
                     )
                   }
                 />
+                <span className="control-help-text">
+                  Existing pixels included so the new area matches the image.
+                </span>
               </label>
               <label className="field-label">
                 Cross axis
@@ -1247,45 +1700,91 @@ function GenerationWorkflowSection({
                     )
                   }
                 />
+                <span className="control-help-text">
+                  Size across the direction, such as height for left or right.
+                </span>
               </label>
             </div>
           ) : null}
         </>
       ) : null}
-      <div className="section-heading">
-        <span>Guide</span>
-      </div>
-      <div className="workflow-segmented-control" aria-label="Sketch guide">
-        <button
-          type="button"
-          className={
-            controlGuideEnabled
-              ? "workflow-option"
-              : "workflow-option workflow-option-active"
-          }
-          aria-pressed={!guideEnabled}
-          onClick={() => onControlGuideEnabledChange(false)}
-        >
-          <MousePointer2 size={15} />
-          None
-        </button>
-        <button
-          type="button"
-          className={
-            guideEnabled
-              ? "workflow-option workflow-option-active"
-              : "workflow-option"
-          }
-          aria-pressed={guideEnabled}
-          disabled={guideDisabled}
-          onClick={() => onControlGuideEnabledChange(true)}
-        >
-          <Palette size={15} />
-          {controlGuideLabel}
-        </button>
-      </div>
+      {workspaceMode === WORKSPACE_MODE_FREE_EDIT && controlGuideAvailable ? (
+        <>
+          <div className="section-heading">
+            <span>Guide</span>
+          </div>
+          <p className="control-help-text">{guideDescription}</p>
+          <div className="workflow-segmented-control" aria-label="Sketch guide">
+            <button
+              type="button"
+              className={
+                controlGuideEnabled
+                  ? "workflow-option"
+                  : "workflow-option workflow-option-active"
+              }
+              aria-pressed={!guideEnabled}
+              onClick={() => onControlGuideEnabledChange(false)}
+            >
+              <MousePointer2 size={15} />
+              None
+            </button>
+            <button
+              type="button"
+              className={
+                guideEnabled
+                  ? "workflow-option workflow-option-active"
+                  : "workflow-option"
+              }
+              aria-pressed={guideEnabled}
+              disabled={guideDisabled}
+              onClick={() => onControlGuideEnabledChange(true)}
+            >
+              <Palette size={15} />
+              {controlGuideLabel}
+            </button>
+          </div>
+        </>
+      ) : null}
     </section>
   );
+}
+
+function OverlapToggle({
+  label,
+  checked,
+  onChange,
+}: {
+  label: string;
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+}) {
+  return (
+    <button
+      type="button"
+      className={
+        checked
+          ? "expand-overlap-toggle expand-overlap-toggle-active"
+          : "expand-overlap-toggle"
+      }
+      aria-pressed={checked}
+      onClick={() => onChange(!checked)}
+    >
+      {label}
+    </button>
+  );
+}
+
+function fixedExpandScaleLabel(parameters: GenerationParameters): string {
+  if (parameters.fixed_expand_output_scale === "safe") {
+    return "60%";
+  }
+  if (parameters.fixed_expand_output_scale === "balanced") {
+    return "75%";
+  }
+  if (parameters.fixed_expand_output_scale === "custom") {
+    return `${parameters.fixed_expand_custom_output_scale}%`;
+  }
+  return "100%";
 }
 
 function sanitizeDirectionalNumber(value: string): number {
@@ -1313,7 +1812,6 @@ function ToolContextSections({
   brushSize,
   eraserHardness,
   controlGuideColor,
-  controlGuideBinary,
   controlGuideStrength,
   controlGuideMaskMode,
   onSelectionChange,
@@ -1333,7 +1831,6 @@ function ToolContextSections({
   brushSize: number;
   eraserHardness: number;
   controlGuideColor: string;
-  controlGuideBinary: boolean;
   controlGuideStrength: number;
   controlGuideMaskMode: ControlGuideMaskMode;
   onSelectionChange: (selection: SelectionRect) => void;
@@ -1345,6 +1842,10 @@ function ToolContextSections({
   onClearMask: () => void;
   onClearControlGuide: () => void;
 }) {
+  if (!CONTROLNET_GUIDE_UI_ENABLED && tool === TOOL_CONTROL_GUIDE) {
+    return null;
+  }
+
   if (tool === TOOL_CONTROL_GUIDE) {
     return (
       <section className="tool-control-section">
@@ -1356,12 +1857,10 @@ function ToolContextSections({
           step={1}
           onChange={onBrushSizeChange}
         />
-        {controlGuideBinary ? null : (
-          <ControlGuideColorPicker
-            value={controlGuideColor}
-            onChange={onControlGuideColorChange}
-          />
-        )}
+        <ControlGuideColorPicker
+          value={controlGuideColor}
+          onChange={onControlGuideColorChange}
+        />
         <SliderField
           label="Stroke strength"
           value={controlGuideStrength}

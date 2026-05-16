@@ -17,6 +17,7 @@ import {
   MAX_ERASER_HARDNESS,
   MIN_CONTROL_GUIDE_STRENGTH,
   MIN_ERASER_HARDNESS,
+  OUTPAINT_DIRECTION_AROUND,
   OUTPAINT_DIRECTION_DOWN,
   OUTPAINT_DIRECTION_LEFT,
   OUTPAINT_DIRECTION_RIGHT,
@@ -49,14 +50,17 @@ import type {
 import { CANVAS_THEME } from '../theme/canvasTheme'
 
 const MAX_IMPORT_CANVAS_SIZE = 4096
+const MIN_IMPORT_IMAGE_EDGE = 64
 const MAX_INPAINT_INPUT_SIZE = 1024
 const INPAINT_MASK_CONTEXT_PADDING = 256
 const OUTPAINT_CONTEXT_SIZE = 512
 const OUTPAINT_DEFAULT_MAX_WIDTH = 1536
 const OUTPAINT_DEFAULT_MAX_HEIGHT = 1024
+const MAX_IMPORT_IMAGE_EDGE = OUTPAINT_DEFAULT_MAX_WIDTH
 const WHOLE_RESIZED_MAX_INPUT_EDGE = 1024
 const HF_SPACE_FILL_SIZE_MULTIPLE = 8
 const TRANSPARENT_ALPHA = 0
+const OUTPAINT_COMPOSITION_FEATHER_MAX = 32
 const CONTROL_GUIDE_FALLBACK_RGB: [number, number, number] = [127, 127, 127]
 const CONTROL_GUIDE_NEIGHBORS: Array<[number, number]> = [
   [1, 0],
@@ -74,6 +78,7 @@ interface RenderedGenerationInputs {
   conditioning: GenerationConditioning | null
   replaceDocument: boolean
   directionalPlan: DirectionalOutpaintPlan | null
+  renderSize?: { width: number; height: number }
 }
 
 export interface DirectionalOutpaintPlan {
@@ -88,6 +93,16 @@ export interface DirectionalOutpaintPlan {
   contextRect: DocumentBounds
   generatedRect: DocumentBounds
   drawRect: DocumentBounds
+}
+
+export interface HfSpaceFillExpansionPlan {
+  selection: SelectionRect
+  sourceRect: DocumentBounds
+  preservedRect: DocumentBounds
+  resizePercentage: number
+  overlapPercentage: number
+  overlap: { x: number; y: number }
+  renderSize: { width: number; height: number }
 }
 
 /**
@@ -151,7 +166,13 @@ export async function measureImage(dataUrl: string): Promise<{ width: number; he
 
 export async function prepareRasterImport(dataUrl: string): Promise<PreparedRasterImport> {
   const image = await loadImageElement(dataUrl)
-  const raster = trimTransparentImageBounds(image, dataUrl)
+  const normalized = normalizeImportImage(image, dataUrl)
+  const raster = trimTransparentImageBounds(
+    normalized.source,
+    normalized.dataUrl,
+    normalized.width,
+    normalized.height,
+  )
   const sourceWidth = raster.width
   const sourceHeight = raster.height
   const padding = calculateImportPadding(sourceWidth, sourceHeight)
@@ -192,15 +213,40 @@ export async function renderGenerationInputs(
     outpaintContextSize?: number
     outpaintCrossSize?: number
     hfSpaceOverlapPercentage?: number
+    hfSpaceFixedExpansion?: boolean
+    hfSpaceResizeOption?: string
+    hfSpaceCustomResizePercentage?: number
+    hfSpaceOverlapLeft?: boolean
+    hfSpaceOverlapRight?: boolean
+    hfSpaceOverlapTop?: boolean
+    hfSpaceOverlapBottom?: boolean
+    fixedExpandPercent?: number
+    fixedExpandWidthPercent?: number
+    fixedExpandHeightPercent?: number
+    fixedExpandOutputScalePercent?: number
   } = {},
 ): Promise<RenderedGenerationInputs> {
   if (
     mode === GENERATION_MODE_OUTPAINT &&
-    options.outpaintStrategy === OUTPAINT_STRATEGY_HF_SPACE_FILL
+    options.outpaintStrategy === OUTPAINT_STRATEGY_HF_SPACE_FILL &&
+    options.hfSpaceFixedExpansion
   ) {
     return renderHfSpaceFillGenerationInputs(documentState, documentState.selection, {
       direction: options.outpaintDirection,
+      generatedSize: options.outpaintGeneratedSize,
+      crossSize: options.outpaintCrossSize,
       overlapPercentage: options.hfSpaceOverlapPercentage,
+      fixedExpansion: options.hfSpaceFixedExpansion,
+      resizeOption: options.hfSpaceResizeOption,
+      customResizePercentage: options.hfSpaceCustomResizePercentage,
+      overlapLeft: options.hfSpaceOverlapLeft,
+      overlapRight: options.hfSpaceOverlapRight,
+      overlapTop: options.hfSpaceOverlapTop,
+      overlapBottom: options.hfSpaceOverlapBottom,
+      expansionPercent: options.fixedExpandPercent,
+      widthExpansionPercent: options.fixedExpandWidthPercent,
+      heightExpansionPercent: options.fixedExpandHeightPercent,
+      outputScalePercent: options.fixedExpandOutputScalePercent,
     })
   }
   const fullCanvas = await renderDocumentCanvas(documentState)
@@ -255,7 +301,11 @@ export async function renderGenerationInputs(
         'Move the outpaint frame next to visible image content before generating.',
       )
     }
-    const maskImage = createOutpaintMaskImage(maskContext, imageData)
+    const maskImage = createOutpaintMaskImage(
+      maskContext,
+      imageData,
+      freeOutpaintOverlapPixels(renderWidth, renderHeight, options.hfSpaceOverlapPercentage),
+    )
     imageContext.putImageData(imageData, 0, 0)
     maskContext.putImageData(maskImage, 0, 0)
   }
@@ -330,7 +380,11 @@ export async function composeSelectionResults(
   selection: SelectionRect,
   resultImages: string[],
   compositionMask: string | null = null,
-  options: { replaceDocument?: boolean; directionalPlan?: DirectionalOutpaintPlan | null } = {},
+  options: {
+    replaceDocument?: boolean
+    directionalPlan?: DirectionalOutpaintPlan | null
+    softCompositionMask?: boolean
+  } = {},
 ): Promise<{ images: string[]; bounds: DocumentBounds }> {
   if (options.directionalPlan) {
     return composeDirectionalResults(documentState, resultImages, options.directionalPlan)
@@ -342,7 +396,7 @@ export async function composeSelectionResults(
       width: selection.width,
       height: selection.height,
     }
-    const images = await Promise.all(
+    const canvases = await Promise.all(
       resultImages.map(async (resultImage) => {
         const result = await loadImageElement(resultImage)
         const canvas = document.createElement('canvas')
@@ -351,15 +405,15 @@ export async function composeSelectionResults(
         const context = requireCanvasContext(canvas)
         context.clearRect(0, 0, bounds.width, bounds.height)
         context.drawImage(result, 0, 0, bounds.width, bounds.height)
-        return canvas.toDataURL('image/png')
+        return canvas
       }),
     )
-    return { images, bounds }
+    return cropCanvasesToSharedVisibleBounds(canvases, bounds)
   }
   const baseCanvas = await renderDocumentCanvas(documentState)
   const bounds = getCompositionBounds(documentState, selection)
   const mask = compositionMask ? await loadImageElement(compositionMask) : null
-  const images = await Promise.all(
+  const canvases = await Promise.all(
     resultImages.map(async (resultImage) => {
       const result = await loadImageElement(resultImage)
       const canvas = document.createElement('canvas')
@@ -382,15 +436,26 @@ export async function composeSelectionResults(
           selection.height,
         )
         overlayContext.globalCompositeOperation = 'destination-in'
-        overlayContext.drawImage(
-          mask,
-          selection.x - bounds.x,
-          selection.y - bounds.y,
-          selection.width,
-          selection.height,
-        )
+        if (options.softCompositionMask) {
+          drawSoftCompositionMask(
+            overlayContext,
+            mask,
+            selection.x - bounds.x,
+            selection.y - bounds.y,
+            selection.width,
+            selection.height,
+          )
+        } else {
+          overlayContext.drawImage(
+            mask,
+            selection.x - bounds.x,
+            selection.y - bounds.y,
+            selection.width,
+            selection.height,
+          )
+        }
         context.drawImage(overlayCanvas, 0, 0)
-        return canvas.toDataURL('image/png')
+        return canvas
       }
       context.drawImage(
         result,
@@ -399,10 +464,97 @@ export async function composeSelectionResults(
         selection.width,
         selection.height,
       )
-      return canvas.toDataURL('image/png')
+      return canvas
     }),
   )
-  return { images, bounds }
+  return cropCanvasesToSharedVisibleBounds(canvases, bounds)
+}
+
+function cropCanvasesToSharedVisibleBounds(
+  canvases: HTMLCanvasElement[],
+  bounds: DocumentBounds,
+): { images: string[]; bounds: DocumentBounds } {
+  const visibleBounds = canvases.reduce<DocumentBounds | null>((currentBounds, canvas) => {
+    const context = requireCanvasContext(canvas)
+    const imageData = context.getImageData(0, 0, canvas.width, canvas.height)
+    const localBounds = findVisibleAlphaBounds(imageData.data, canvas.width, canvas.height)
+    if (!localBounds) {
+      return currentBounds
+    }
+    const absoluteBounds = {
+      x: bounds.x + localBounds.x,
+      y: bounds.y + localBounds.y,
+      width: localBounds.width,
+      height: localBounds.height,
+    }
+    return currentBounds ? unionBounds(currentBounds, absoluteBounds) : sanitizeBounds(absoluteBounds)
+  }, null)
+  if (!visibleBounds) {
+    return { images: canvases.map((canvas) => canvas.toDataURL('image/png')), bounds }
+  }
+  const croppedBounds = sanitizeBounds(visibleBounds)
+  return {
+    images: canvases.map((canvas) =>
+      cropCanvasToDataUrl(canvas, {
+        x: croppedBounds.x - bounds.x,
+        y: croppedBounds.y - bounds.y,
+        width: croppedBounds.width,
+        height: croppedBounds.height,
+      }),
+    ),
+    bounds: croppedBounds,
+  }
+}
+
+function cropCanvasToDataUrl(canvas: HTMLCanvasElement, bounds: DocumentBounds): string {
+  const crop = sanitizeBounds(bounds)
+  if (
+    crop.x === 0 &&
+    crop.y === 0 &&
+    crop.width === canvas.width &&
+    crop.height === canvas.height
+  ) {
+    return canvas.toDataURL('image/png')
+  }
+  const croppedCanvas = document.createElement('canvas')
+  croppedCanvas.width = crop.width
+  croppedCanvas.height = crop.height
+  const croppedContext = requireCanvasContext(croppedCanvas)
+  croppedContext.clearRect(0, 0, crop.width, crop.height)
+  croppedContext.drawImage(
+    canvas,
+    crop.x,
+    crop.y,
+    crop.width,
+    crop.height,
+    0,
+    0,
+    crop.width,
+    crop.height,
+  )
+  return croppedCanvas.toDataURL('image/png')
+}
+
+function drawSoftCompositionMask(
+  context: CanvasRenderingContext2D,
+  mask: HTMLImageElement,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+): void {
+  const featherRadius = compositionMaskFeatherRadius(width, height)
+  context.save()
+  context.filter = `blur(${featherRadius}px)`
+  context.drawImage(mask, x, y, width, height)
+  context.restore()
+}
+
+function compositionMaskFeatherRadius(width: number, height: number): number {
+  return Math.max(
+    2,
+    Math.min(OUTPAINT_COMPOSITION_FEATHER_MAX, Math.round(Math.min(width, height) * 0.025)),
+  )
 }
 
 async function composeDirectionalResults(
@@ -549,7 +701,10 @@ function clampEraserHardness(value: number): number {
 
 export async function renderDocumentDataUrl(documentState: EditorDocument): Promise<string> {
   const canvas = await renderDocumentCanvas(documentState)
-  return canvas.toDataURL('image/png')
+  const context = requireCanvasContext(canvas)
+  const imageData = context.getImageData(0, 0, canvas.width, canvas.height)
+  const bounds = findVisibleAlphaBounds(imageData.data, canvas.width, canvas.height)
+  return bounds ? cropCanvasToDataUrl(canvas, bounds) : canvas.toDataURL('image/png')
 }
 
 async function renderDocumentCanvas(documentState: EditorDocument): Promise<HTMLCanvasElement> {
@@ -731,12 +886,50 @@ function calculateImportPadding(width: number, height: number): number {
   return Math.max(64, Math.min(DEFAULT_SELECTION_SIZE, availablePadding))
 }
 
-function trimTransparentImageBounds(
+function normalizeImportImage(
   image: HTMLImageElement,
+  dataUrl: string,
+): { source: CanvasImageSource; dataUrl: string; width: number; height: number } {
+  const width = image.naturalWidth
+  const height = image.naturalHeight
+  const scale = importImageScale(width, height)
+  if (scale === 1) {
+    return { source: image, dataUrl, width, height }
+  }
+  const targetWidth = Math.max(1, Math.round(width * scale))
+  const targetHeight = Math.max(1, Math.round(height * scale))
+  const canvas = document.createElement('canvas')
+  canvas.width = targetWidth
+  canvas.height = targetHeight
+  const context = requireCanvasContext(canvas)
+  context.drawImage(image, 0, 0, targetWidth, targetHeight)
+  return {
+    source: canvas,
+    dataUrl: canvas.toDataURL('image/png'),
+    width: targetWidth,
+    height: targetHeight,
+  }
+}
+
+function importImageScale(width: number, height: number): number {
+  const shortestSide = Math.min(width, height)
+  const longestSide = Math.max(width, height)
+  let scale = 1
+  if (shortestSide < MIN_IMPORT_IMAGE_EDGE) {
+    scale = MIN_IMPORT_IMAGE_EDGE / shortestSide
+  }
+  if (longestSide * scale > MAX_IMPORT_IMAGE_EDGE) {
+    scale = MAX_IMPORT_IMAGE_EDGE / longestSide
+  }
+  return scale
+}
+
+function trimTransparentImageBounds(
+  image: CanvasImageSource,
   fallbackDataUrl: string,
+  sourceWidth: number,
+  sourceHeight: number,
 ): { dataUrl: string; width: number; height: number } {
-  const sourceWidth = image.naturalWidth
-  const sourceHeight = image.naturalHeight
   const sourceCanvas = document.createElement('canvas')
   sourceCanvas.width = sourceWidth
   sourceCanvas.height = sourceHeight
@@ -1059,14 +1252,48 @@ function renderDirectionalGenerationInputs(
 async function renderHfSpaceFillGenerationInputs(
   documentState: EditorDocument,
   selectedFrame: SelectionRect,
-  _options: {
+  options: {
     direction?: OutpaintDirection
+    generatedSize?: number
+    crossSize?: number
     overlapPercentage?: number
+    fixedExpansion?: boolean
+    resizeOption?: string
+    customResizePercentage?: number
+    overlapLeft?: boolean
+    overlapRight?: boolean
+    overlapTop?: boolean
+    overlapBottom?: boolean
+    expansionPercent?: number
+    widthExpansionPercent?: number
+    heightExpansionPercent?: number
+    outputScalePercent?: number
   },
 ): Promise<RenderedGenerationInputs> {
   const sourceCanvas = await renderHfSpaceVisibleSource(documentState)
-  const targetWidth = hfSpaceFillSafeDimension(Math.round(selectedFrame.width))
-  const targetHeight = hfSpaceFillSafeDimension(Math.round(selectedFrame.height))
+  const visibleBounds = visibleSourceBounds(documentState, sourceCanvas)
+  const expansionPlan = options.fixedExpansion
+    ? planHfSpaceFillExpansion(visibleBounds, {
+        direction: options.direction,
+        generatedSize: options.generatedSize,
+        crossSize: options.crossSize,
+        resizeOption: options.resizeOption,
+        customResizePercentage: options.customResizePercentage,
+        overlapPercentage: options.overlapPercentage,
+        overlapLeft: options.overlapLeft,
+        overlapRight: options.overlapRight,
+        overlapTop: options.overlapTop,
+        overlapBottom: options.overlapBottom,
+        expansionPercent: options.expansionPercent,
+        widthExpansionPercent: options.widthExpansionPercent,
+        heightExpansionPercent: options.heightExpansionPercent,
+        outputScalePercent: options.outputScalePercent,
+      })
+    : null
+  const targetSelection = expansionPlan?.selection ?? selectedFrame
+  const targetWidth = hfSpaceFillSafeDimension(Math.round(targetSelection.width))
+  const targetHeight = hfSpaceFillSafeDimension(Math.round(targetSelection.height))
+  const renderSize = expansionPlan?.renderSize ?? { width: targetWidth, height: targetHeight }
 
   const maskCanvas = document.createElement('canvas')
   maskCanvas.width = sourceCanvas.width
@@ -1076,8 +1303,8 @@ async function renderHfSpaceFillGenerationInputs(
   maskContext.fillRect(0, 0, sourceCanvas.width, sourceCanvas.height)
 
   const selection = {
-    x: Math.round(selectedFrame.x),
-    y: Math.round(selectedFrame.y),
+    x: Math.round(targetSelection.x),
+    y: Math.round(targetSelection.y),
     width: targetWidth,
     height: targetHeight,
   }
@@ -1088,8 +1315,224 @@ async function renderHfSpaceFillGenerationInputs(
     selection,
     previewSelection: selection,
     conditioning: null,
-    replaceDocument: true,
+    replaceDocument: Boolean(options.fixedExpansion),
     directionalPlan: null,
+    renderSize,
+  }
+}
+
+export function planHfSpaceFillExpansion(
+  visibleBounds: DocumentBounds,
+  options: {
+    direction?: OutpaintDirection
+    generatedSize?: number
+    crossSize?: number
+    resizeOption?: string
+    customResizePercentage?: number
+    overlapPercentage?: number
+    overlapLeft?: boolean
+    overlapRight?: boolean
+    overlapTop?: boolean
+    overlapBottom?: boolean
+    expansionPercent?: number
+    widthExpansionPercent?: number
+    heightExpansionPercent?: number
+    outputScalePercent?: number
+  } = {},
+): HfSpaceFillExpansionPlan {
+  const direction = options.direction ?? OUTPAINT_DIRECTION_RIGHT
+  const generatedSize = boundedDirectionalSize(
+    options.generatedSize,
+    DIRECTIONAL_OUTPAINT_DEFAULT_GENERATED_SIZE,
+  )
+  const crossSize = boundedDirectionalSize(
+    options.crossSize,
+    DIRECTIONAL_OUTPAINT_DEFAULT_CROSS_SIZE,
+  )
+  const percentageSizingActive =
+    typeof options.expansionPercent === 'number' ||
+    typeof options.widthExpansionPercent === 'number' ||
+    typeof options.heightExpansionPercent === 'number'
+  const expansionPercent = boundedExpansionPercentage(options.expansionPercent, 50)
+  const widthExpansionPercent = boundedExpansionPercentage(
+    options.widthExpansionPercent,
+    expansionPercent,
+  )
+  const heightExpansionPercent = boundedExpansionPercentage(
+    options.heightExpansionPercent,
+    expansionPercent,
+  )
+  const requestedWidth = percentageSizingActive
+    ? fixedExpansionRequestedWidth(visibleBounds, direction, expansionPercent, widthExpansionPercent)
+    : direction === OUTPAINT_DIRECTION_AROUND
+      ? generatedSize
+      : direction === OUTPAINT_DIRECTION_LEFT || direction === OUTPAINT_DIRECTION_RIGHT
+        ? visibleBounds.width + generatedSize
+        : Math.max(visibleBounds.width, crossSize)
+  const requestedHeight = percentageSizingActive
+    ? fixedExpansionRequestedHeight(visibleBounds, direction, expansionPercent, heightExpansionPercent)
+    : direction === OUTPAINT_DIRECTION_AROUND
+      ? crossSize
+      : direction === OUTPAINT_DIRECTION_UP || direction === OUTPAINT_DIRECTION_DOWN
+        ? visibleBounds.height + generatedSize
+        : Math.max(visibleBounds.height, crossSize)
+  const targetWidth = hfSpaceFillSafeDimension(Math.round(requestedWidth))
+  const targetHeight = hfSpaceFillSafeDimension(Math.round(requestedHeight))
+  const selection = fixedExpansionSelection(visibleBounds, direction, targetWidth, targetHeight)
+  const renderSize = fixedExpansionRenderSize(
+    targetWidth,
+    targetHeight,
+    options.outputScalePercent,
+  )
+  const resizePercentage = hfSpaceResizePercentage(
+    options.resizeOption,
+    options.customResizePercentage,
+  )
+  const fitScale = Math.min(
+    targetWidth / Math.max(1, visibleBounds.width),
+    targetHeight / Math.max(1, visibleBounds.height),
+  )
+  const sourceWidth = Math.max(64, Math.round(visibleBounds.width * fitScale * (resizePercentage / 100)))
+  const sourceHeight = Math.max(64, Math.round(visibleBounds.height * fitScale * (resizePercentage / 100)))
+  const sourceOffset = hfSpaceSourceOffset(direction, targetWidth, targetHeight, sourceWidth, sourceHeight)
+  const sourceRect = {
+    x: selection.x + sourceOffset.x,
+    y: selection.y + sourceOffset.y,
+    width: sourceWidth,
+    height: sourceHeight,
+  }
+  const overlapPercentage = boundedOverlapPercentage(options.overlapPercentage)
+  const overlap = {
+    x: Math.max(1, Math.round(sourceWidth * (overlapPercentage / 100))),
+    y: Math.max(1, Math.round(sourceHeight * (overlapPercentage / 100))),
+  }
+  const preservedRect = preservedSourceRect(sourceRect, direction, overlap, {
+    left: options.overlapLeft ?? true,
+    right: options.overlapRight ?? true,
+    top: options.overlapTop ?? true,
+    bottom: options.overlapBottom ?? true,
+  })
+  return {
+    selection,
+    sourceRect,
+    preservedRect,
+    resizePercentage,
+    overlapPercentage,
+    overlap,
+    renderSize,
+  }
+}
+
+function visibleSourceBounds(
+  documentState: EditorDocument,
+  sourceCanvas: HTMLCanvasElement,
+): DocumentBounds {
+  return documentState.rasterBounds ?? {
+    x: 0,
+    y: 0,
+    width: sourceCanvas.width,
+    height: sourceCanvas.height,
+  }
+}
+
+function fixedExpansionSelection(
+  visibleBounds: DocumentBounds,
+  direction: OutpaintDirection,
+  width: number,
+  height: number,
+): SelectionRect {
+  if (direction === OUTPAINT_DIRECTION_LEFT) {
+    return {
+      x: Math.round(visibleBounds.x + visibleBounds.width - width),
+      y: Math.round(visibleBounds.y + visibleBounds.height / 2 - height / 2),
+      width,
+      height,
+    }
+  }
+  if (direction === OUTPAINT_DIRECTION_UP) {
+    return {
+      x: Math.round(visibleBounds.x + visibleBounds.width / 2 - width / 2),
+      y: Math.round(visibleBounds.y + visibleBounds.height - height),
+      width,
+      height,
+    }
+  }
+  if (direction === OUTPAINT_DIRECTION_DOWN) {
+    return {
+      x: Math.round(visibleBounds.x + visibleBounds.width / 2 - width / 2),
+      y: Math.round(visibleBounds.y),
+      width,
+      height,
+    }
+  }
+  if (direction === OUTPAINT_DIRECTION_AROUND) {
+    return {
+      x: Math.round(visibleBounds.x + visibleBounds.width / 2 - width / 2),
+      y: Math.round(visibleBounds.y + visibleBounds.height / 2 - height / 2),
+      width,
+      height,
+    }
+  }
+  return {
+    x: Math.round(visibleBounds.x),
+    y: Math.round(visibleBounds.y + visibleBounds.height / 2 - height / 2),
+    width,
+    height,
+  }
+}
+
+function hfSpaceSourceOffset(
+  direction: OutpaintDirection,
+  targetWidth: number,
+  targetHeight: number,
+  sourceWidth: number,
+  sourceHeight: number,
+): { x: number; y: number } {
+  const centeredX = Math.round((targetWidth - sourceWidth) / 2)
+  const centeredY = Math.round((targetHeight - sourceHeight) / 2)
+  if (direction === OUTPAINT_DIRECTION_LEFT) {
+    return { x: targetWidth - sourceWidth, y: centeredY }
+  }
+  if (direction === OUTPAINT_DIRECTION_UP) {
+    return { x: centeredX, y: targetHeight - sourceHeight }
+  }
+  if (direction === OUTPAINT_DIRECTION_DOWN) {
+    return { x: centeredX, y: 0 }
+  }
+  if (direction === OUTPAINT_DIRECTION_AROUND) {
+    return { x: centeredX, y: centeredY }
+  }
+  return { x: 0, y: centeredY }
+}
+
+function preservedSourceRect(
+  sourceRect: DocumentBounds,
+  direction: OutpaintDirection,
+  overlap: { x: number; y: number },
+  sides: { left: boolean; right: boolean; top: boolean; bottom: boolean },
+): DocumentBounds {
+  const patch = 2
+  let left = sourceRect.x + (sides.left ? overlap.x : patch)
+  let right = sourceRect.x + sourceRect.width - (sides.right ? overlap.x : patch)
+  let top = sourceRect.y + (sides.top ? overlap.y : patch)
+  let bottom = sourceRect.y + sourceRect.height - (sides.bottom ? overlap.y : patch)
+  if (direction === OUTPAINT_DIRECTION_RIGHT) {
+    left = sourceRect.x + (sides.left ? overlap.x : 0)
+  }
+  if (direction === OUTPAINT_DIRECTION_LEFT) {
+    right = sourceRect.x + sourceRect.width - (sides.right ? overlap.x : 0)
+  }
+  if (direction === OUTPAINT_DIRECTION_DOWN) {
+    top = sourceRect.y + (sides.top ? overlap.y : 0)
+  }
+  if (direction === OUTPAINT_DIRECTION_UP) {
+    bottom = sourceRect.y + sourceRect.height - (sides.bottom ? overlap.y : 0)
+  }
+  return {
+    x: Math.round(left),
+    y: Math.round(top),
+    width: Math.max(1, Math.round(right - left)),
+    height: Math.max(1, Math.round(bottom - top)),
   }
 }
 
@@ -1165,6 +1608,88 @@ function hfSpaceFillSafeDimension(value: number): number {
     HF_SPACE_FILL_SIZE_MULTIPLE,
     bounded - (bounded % HF_SPACE_FILL_SIZE_MULTIPLE),
   )
+}
+
+function fixedExpansionRequestedWidth(
+  visibleBounds: DocumentBounds,
+  direction: OutpaintDirection,
+  expansionPercent: number,
+  widthExpansionPercent: number,
+): number {
+  if (direction === OUTPAINT_DIRECTION_LEFT || direction === OUTPAINT_DIRECTION_RIGHT) {
+    return visibleBounds.width * (1 + expansionPercent / 100)
+  }
+  if (direction === OUTPAINT_DIRECTION_AROUND) {
+    return visibleBounds.width * (1 + widthExpansionPercent / 100)
+  }
+  return visibleBounds.width
+}
+
+function fixedExpansionRequestedHeight(
+  visibleBounds: DocumentBounds,
+  direction: OutpaintDirection,
+  expansionPercent: number,
+  heightExpansionPercent: number,
+): number {
+  if (direction === OUTPAINT_DIRECTION_UP || direction === OUTPAINT_DIRECTION_DOWN) {
+    return visibleBounds.height * (1 + expansionPercent / 100)
+  }
+  if (direction === OUTPAINT_DIRECTION_AROUND) {
+    return visibleBounds.height * (1 + heightExpansionPercent / 100)
+  }
+  return visibleBounds.height
+}
+
+function fixedExpansionRenderSize(
+  targetWidth: number,
+  targetHeight: number,
+  outputScalePercent: number | undefined,
+): { width: number; height: number } {
+  const scalePercent = boundedOutputScalePercentage(outputScalePercent)
+  return {
+    width: hfSpaceFillSafeDimension(Math.round(targetWidth * (scalePercent / 100))),
+    height: hfSpaceFillSafeDimension(Math.round(targetHeight * (scalePercent / 100))),
+  }
+}
+
+function boundedExpansionPercentage(value: number | undefined, fallback: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return fallback
+  }
+  return Math.max(5, Math.min(300, Math.round(value)))
+}
+
+function boundedOutputScalePercentage(value: number | undefined): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return 100
+  }
+  return Math.max(25, Math.min(100, Math.round(value)))
+}
+
+function hfSpaceResizePercentage(option: string | undefined, customValue: number | undefined): number {
+  if (option === '50%') {
+    return 50
+  }
+  if (option === '33%') {
+    return 33
+  }
+  if (option === '25%') {
+    return 25
+  }
+  if (option === 'Custom') {
+    if (typeof customValue === 'number' && Number.isFinite(customValue)) {
+      return Math.max(1, Math.min(100, Math.round(customValue)))
+    }
+    return 50
+  }
+  return 100
+}
+
+function boundedOverlapPercentage(value: number | undefined): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return 10
+  }
+  return Math.max(1, Math.min(50, Math.round(value)))
 }
 
 function drawDirectionalSourceContext(
@@ -1432,8 +1957,8 @@ function createInitialOutpaintSelection(
 ): SelectionRect {
   const selectionWidth = Math.min(DEFAULT_SELECTION_SIZE, canvasWidth)
   const selectionHeight = Math.min(DEFAULT_SELECTION_SIZE, canvasHeight)
-  const halfSelection = Math.round(selectionWidth / 2)
-  const x = padding + sourceWidth - halfSelection
+  const overlap = Math.min(64, sourceWidth, selectionWidth)
+  const x = padding + sourceWidth - overlap
   const y = padding + Math.round((sourceHeight - selectionHeight) / 2)
   return sanitizeSelection(
     {
@@ -1448,16 +1973,29 @@ function createInitialOutpaintSelection(
 function createOutpaintMaskImage(
   context: CanvasRenderingContext2D,
   imageData: ImageData,
+  overlapPixels = 0,
 ): ImageData {
   const maskImage = context.createImageData(imageData.width, imageData.height)
+  const maskValues = new Uint8ClampedArray(imageData.width * imageData.height)
   for (let index = 0; index < imageData.data.length; index += 4) {
     const alpha = imageData.data[index + 3]
     const value = alpha < 128 ? 255 : 0
+    maskValues[index / 4] = value
+  }
+  const expandedMaskValues = overlapPixels > 0
+    ? expandMaskValues(maskValues, imageData.width, imageData.height, overlapPixels)
+    : maskValues
+  for (let index = 0; index < imageData.data.length; index += 4) {
+    const value = expandedMaskValues[index / 4]
     if (value === 255) {
-      imageData.data[index] = 0
-      imageData.data[index + 1] = 0
-      imageData.data[index + 2] = 0
-      imageData.data[index + 3] = 0
+      if (maskValues[index / 4] === 255) {
+        imageData.data[index] = 0
+        imageData.data[index + 1] = 0
+        imageData.data[index + 2] = 0
+        imageData.data[index + 3] = 0
+      } else {
+        imageData.data[index + 3] = 255
+      }
     }
     maskImage.data[index] = value
     maskImage.data[index + 1] = value
@@ -1465,6 +2003,58 @@ function createOutpaintMaskImage(
     maskImage.data[index + 3] = 255
   }
   return maskImage
+}
+
+function expandMaskValues(
+  maskValues: Uint8ClampedArray,
+  width: number,
+  height: number,
+  overlapPixels: number,
+): Uint8ClampedArray {
+  const distance = new Int32Array(width * height)
+  const maxDistance = width + height + overlapPixels + 1
+  for (let index = 0; index < maskValues.length; index += 1) {
+    distance[index] = maskValues[index] === 255 ? 0 : maxDistance
+  }
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const index = y * width + x
+      if (x > 0) {
+        distance[index] = Math.min(distance[index], distance[index - 1] + 1)
+      }
+      if (y > 0) {
+        distance[index] = Math.min(distance[index], distance[index - width] + 1)
+      }
+    }
+  }
+  for (let y = height - 1; y >= 0; y -= 1) {
+    for (let x = width - 1; x >= 0; x -= 1) {
+      const index = y * width + x
+      if (x < width - 1) {
+        distance[index] = Math.min(distance[index], distance[index + 1] + 1)
+      }
+      if (y < height - 1) {
+        distance[index] = Math.min(distance[index], distance[index + width] + 1)
+      }
+    }
+  }
+  const expanded = new Uint8ClampedArray(maskValues.length)
+  for (let index = 0; index < distance.length; index += 1) {
+    expanded[index] = distance[index] <= overlapPixels ? 255 : 0
+  }
+  return expanded
+}
+
+function freeOutpaintOverlapPixels(
+  width: number,
+  height: number,
+  overlapPercentage: number | undefined,
+): number {
+  if (typeof overlapPercentage !== 'number' || !Number.isFinite(overlapPercentage)) {
+    return 0
+  }
+  const percentage = boundedOverlapPercentage(overlapPercentage)
+  return Math.max(0, Math.min(256, Math.round(Math.min(width, height) * (percentage / 100))))
 }
 
 function imageDataHasVisiblePixels(imageData: ImageData): boolean {

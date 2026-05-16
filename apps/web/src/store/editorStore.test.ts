@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  ADAPTER_SDXL_INPAINT,
+  ADAPTER_SDXL_FILL_IP_REFINE,
   DEFAULT_ERASER_HARDNESS,
   DEFAULT_CONTROL_GUIDE_COLOR,
   DEFAULT_CONTROL_GUIDE_MASK_MODE,
@@ -15,6 +15,7 @@ import {
   INPAINT_AREA_WHOLE_SELECTION,
   OUTPAINT_DIRECTION_RIGHT,
   OUTPAINT_STRATEGY_DIRECTIONAL,
+  OUTPAINT_STRATEGY_HF_SPACE_FILL,
   OUTPAINT_STRATEGY_WHOLE_RESIZED,
   RESULT_MODE_GENERATED_SELECTION,
   RESULT_MODE_PRESERVE_KNOWN,
@@ -24,13 +25,21 @@ import {
   TOOL_INPAINT_MASK,
   TOOL_OUTPAINT_FRAME,
   TOOL_SELECT,
+  WORKSPACE_MODE_EXPAND_IMAGE,
+  WORKSPACE_MODE_FREE_EDIT,
 } from "../constants/domain";
 import { useEditorStore } from "./editorStore";
 
 describe("editorStore", () => {
-  it("starts on standard inpaint with ControlNet sketch disabled", () => {
+  it("starts on the recommended SDXL Fill profile with ControlNet sketch disabled", () => {
     expect(useEditorStore.getState().selectedAdapterId).toBe(DEFAULT_ADAPTER_ID);
-    expect(DEFAULT_ADAPTER_ID).toBe("sd15-inpaint");
+    expect(DEFAULT_ADAPTER_ID).toBe("sdxl-fill-ip-refine");
+    expect(useEditorStore.getState().modelId).toBe("SG161222/RealVisXL_V5.0_Lightning");
+    expect(useEditorStore.getState().parameters.outpaint_strategy).toBe(
+      OUTPAINT_STRATEGY_HF_SPACE_FILL,
+    );
+    expect(useEditorStore.getState().parameters.steps).toBe(8);
+    expect(useEditorStore.getState().parameters.guidance_scale).toBe(1.5);
     expect(useEditorStore.getState().controlGuideEnabled).toBe(false);
   });
 
@@ -161,7 +170,54 @@ describe("editorStore", () => {
     );
   });
 
-  it("applies the directional SDXL outpaint preset and clears incompatible values", () => {
+  it("switches expand image mode to fixed SDXL Fill expansion without a free frame", () => {
+    useEditorStore.setState((state) => ({
+      workspaceMode: WORKSPACE_MODE_FREE_EDIT,
+      tool: TOOL_OUTPAINT_FRAME,
+      canvasSelectionTarget: { kind: "frame" },
+      generationMode: GENERATION_MODE_INPAINT,
+      controlGuideEnabled: true,
+      parameters: {
+        ...state.parameters,
+        outpaint_strategy: OUTPAINT_STRATEGY_WHOLE_RESIZED,
+      },
+    }));
+
+    useEditorStore.getState().setWorkspaceMode(WORKSPACE_MODE_EXPAND_IMAGE);
+
+    const state = useEditorStore.getState();
+    expect(state.workspaceMode).toBe(WORKSPACE_MODE_EXPAND_IMAGE);
+    expect(state.generationMode).toBe(GENERATION_MODE_OUTPAINT);
+    expect(state.tool).toBe(TOOL_SELECT);
+    expect(state.canvasSelectionTarget).toEqual({ kind: "none" });
+    expect(state.controlGuideEnabled).toBe(false);
+    expect(state.parameters.outpaint_strategy).toBe(OUTPAINT_STRATEGY_HF_SPACE_FILL);
+  });
+
+  it("keeps free edit mode on a movable outpaint frame without forcing adapter changes", () => {
+    useEditorStore.setState((state) => ({
+      workspaceMode: WORKSPACE_MODE_EXPAND_IMAGE,
+      selectedAdapterId: "custom-adapter",
+      tool: TOOL_SELECT,
+      canvasSelectionTarget: { kind: "none" },
+      generationMode: GENERATION_MODE_OUTPAINT,
+      parameters: {
+        ...state.parameters,
+        outpaint_strategy: OUTPAINT_STRATEGY_DIRECTIONAL,
+      },
+    }));
+
+    useEditorStore.getState().setWorkspaceMode(WORKSPACE_MODE_FREE_EDIT);
+
+    const state = useEditorStore.getState();
+    expect(state.workspaceMode).toBe(WORKSPACE_MODE_FREE_EDIT);
+    expect(state.selectedAdapterId).toBe("custom-adapter");
+    expect(state.generationMode).toBe(GENERATION_MODE_OUTPAINT);
+    expect(state.tool).toBe(TOOL_OUTPAINT_FRAME);
+    expect(state.canvasSelectionTarget).toEqual({ kind: "frame" });
+  });
+
+  it("routes the legacy directional preset to SDXL Fill fixed expansion", () => {
     useEditorStore.setState((state) => ({
       selectedAdapterId: "sd15-controlnet-inpaint",
       controlGuideEnabled: true,
@@ -182,9 +238,9 @@ describe("editorStore", () => {
     useEditorStore.getState().applyDirectionalOutpaintPreset();
 
     const state = useEditorStore.getState();
-    expect(state.selectedAdapterId).toBe(ADAPTER_SDXL_INPAINT);
+    expect(state.selectedAdapterId).toBe(ADAPTER_SDXL_FILL_IP_REFINE);
     expect(state.controlGuideEnabled).toBe(false);
-    expect(state.parameters.outpaint_strategy).toBe(OUTPAINT_STRATEGY_DIRECTIONAL);
+    expect(state.parameters.outpaint_strategy).toBe(OUTPAINT_STRATEGY_HF_SPACE_FILL);
     expect(state.parameters.outpaint_direction).toBe(OUTPAINT_DIRECTION_RIGHT);
     expect(state.parameters.outpaint_generated_size).toBe(1024);
     expect(state.parameters.outpaint_context_size).toBe(512);

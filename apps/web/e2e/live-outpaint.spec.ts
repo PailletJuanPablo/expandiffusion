@@ -4,11 +4,20 @@ test('loads a real model, streams a job and navigates generated results', async 
   test.setTimeout(300_000)
 
   await page.goto('http://127.0.0.1:5180')
-  await expect(page.getByRole('dialog', { name: 'Model setup' })).toBeVisible()
-  await expect(page.getByText(/^torch\s/i)).toBeVisible()
+  await expect(page.getByRole('dialog', { name: 'Guided onboarding' })).toBeVisible()
+  await page.getByRole('button', { name: 'Next' }).click()
+  await expect(page.getByRole('heading', { name: 'Load the first model' })).toBeVisible()
+  const loadModelButton = page.getByRole('button', { name: /Load recommended model|Load model/i })
+  if (await loadModelButton.isVisible()) {
+    await loadModelButton.click()
+    await expect(page.getByRole('dialog', { name: 'Model setup' })).toBeVisible()
+    await expect(page.getByText(/^torch\s/i)).toBeVisible()
 
-  await page.getByRole('button', { name: /Load model/i }).click()
-  await expect(page.getByRole('dialog', { name: 'Model setup' })).toBeHidden({ timeout: 180_000 })
+    await expect(page.getByRole('dialog', { name: 'Model setup' })).toBeHidden({ timeout: 180_000 })
+  } else {
+    await page.getByRole('button', { name: 'Continue' }).click()
+  }
+  await page.getByRole('button', { name: 'Skip tour' }).click()
 
   await page.getByRole('textbox', { name: 'Prompt', exact: true }).fill('plain studio wall')
   await page.getByLabel('Steps').fill('2')

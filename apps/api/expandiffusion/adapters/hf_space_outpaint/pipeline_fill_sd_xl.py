@@ -390,7 +390,6 @@ class StableDiffusionXLFillPipeline(DiffusionPipeline, StableDiffusionMixin):
         guidance_scale: float = 1.5,
         controlnet_conditioning_scale: Union[float, List[float]] = 1.0,
         control_mode: int = 6,
-        extra_control_images: dict[int, PipelineImageInput] | None = None,
     ):
         # 1. Check inputs. Raise error if not correct
         self.check_inputs(
@@ -460,17 +459,6 @@ class StableDiffusionXLFillPipeline(DiffusionPipeline, StableDiffusionMixin):
         controlnet_image_list[control_mode] = image
         control_type = [0, 0, 0, 0, 0, 0, 0, 0]
         control_type[control_mode] = 1
-        if extra_control_images:
-            for extra_control_mode, extra_control_image in extra_control_images.items():
-                extra_control_mode = max(0, min(7, int(extra_control_mode)))
-                prepared_control_image = self.prepare_image(
-                    image=extra_control_image,
-                    device=device,
-                    dtype=self.controlnet.dtype,
-                    do_classifier_free_guidance=self.do_classifier_free_guidance,
-                )
-                controlnet_image_list[extra_control_mode] = prepared_control_image
-                control_type[extra_control_mode] = 1
         union_control_type = (
             torch.Tensor(control_type)
             .to(device, dtype=prompt_embeds.dtype)

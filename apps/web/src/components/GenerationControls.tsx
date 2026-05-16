@@ -28,6 +28,7 @@ interface GenerationControlsProps {
   parameters: GenerationParameters
   loraText: string
   textualInversionText: string
+  hiddenControlIds?: Set<string>
   onParameterChange: (id: string, value: unknown) => void
   onLoraTextChange: (value: string) => void
   onTextualInversionTextChange: (value: string) => void
@@ -46,6 +47,7 @@ export function GenerationControls({
   parameters,
   loraText,
   textualInversionText,
+  hiddenControlIds,
   onParameterChange,
   onLoraTextChange,
   onTextualInversionTextChange,
@@ -56,12 +58,15 @@ export function GenerationControls({
     personalization: false,
   })
   const adapterControls = controlsForGenerationMode(
-    controls.filter((control) => !control.plugin_id),
+    controls.filter(
+      (control) => !control.plugin_id && !hiddenControlIds?.has(control.id),
+    ),
     generationMode,
   )
   const basicControls = controlsForSection(adapterControls, CONTROL_SECTION_BASIC)
   const advancedControls = controlsForSection(adapterControls, CONTROL_SECTION_ADVANCED)
   const extensionControls = controlsForSection(loadControls, CONTROL_SECTION_EXTENSIONS)
+    .filter((control) => control.id !== 'loras')
   const toggleSection = (section: keyof typeof openSections) => {
     setOpenSections((current) => ({
       ...current,
@@ -99,29 +104,31 @@ export function GenerationControls({
         />
       </CollapsibleSection>
 
-      <CollapsibleSection
-        title="Personalization"
-        icon={Frame}
-        count={extensionControls.length}
-        open={openSections.personalization}
-        onToggle={() => toggleSection('personalization')}
-      >
-        {extensionControls.length > 0 ? extensionControls.map((control) => (
-          <SchemaControl
-            key={control.id}
-            control={control}
-            value={extensionValue(control.id, loraText, textualInversionText)}
-            onChange={(id, value) =>
-              updateExtensionValue(
-                id,
-                value,
-                onLoraTextChange,
-                onTextualInversionTextChange,
-              )
-            }
-          />
-        )) : <div className="empty-state">No personalization controls for this adapter.</div>}
-      </CollapsibleSection>
+      {extensionControls.length > 0 ? (
+        <CollapsibleSection
+          title="Personalization"
+          icon={Frame}
+          count={extensionControls.length}
+          open={openSections.personalization}
+          onToggle={() => toggleSection('personalization')}
+        >
+          {extensionControls.map((control) => (
+            <SchemaControl
+              key={control.id}
+              control={control}
+              value={extensionValue(control.id, loraText, textualInversionText)}
+              onChange={(id, value) =>
+                updateExtensionValue(
+                  id,
+                  value,
+                  onLoraTextChange,
+                  onTextualInversionTextChange,
+                )
+              }
+            />
+          ))}
+        </CollapsibleSection>
+      ) : null}
     </div>
   )
 }

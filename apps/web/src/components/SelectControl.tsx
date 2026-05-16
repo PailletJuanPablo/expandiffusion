@@ -14,6 +14,7 @@ interface SelectControlProps {
   options: ControlOption[]
   disabled?: boolean
   optionDetails?: Record<string, SelectOptionDetail>
+  showSelectedDescription?: boolean
   onChange: (value: string) => void
 }
 
@@ -23,8 +24,10 @@ export function SelectControl({
   options,
   disabled = false,
   optionDetails,
+  showSelectedDescription = true,
   onChange,
 }: SelectControlProps) {
+  const selectedDetail = optionDetails?.[value]
   return (
     <div className="field-label select-field">
       <span>{label}</span>
@@ -70,6 +73,11 @@ export function SelectControl({
           </Select.Content>
         </Select.Portal>
       </Select.Root>
+      {showSelectedDescription && selectedDetail?.description ? (
+        <span className="select-selected-description">
+          {selectedDetail.description}
+        </span>
+      ) : null}
     </div>
   )
 }

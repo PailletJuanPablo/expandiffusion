@@ -4,10 +4,10 @@ export const ADAPTER_SD15_CONTROLNET_INPAINT = "sd15-controlnet-inpaint";
 export const ADAPTER_SDXL_INPAINT = "sdxl-inpaint";
 export const ADAPTER_SDXL_CONTROLNET_INPAINT = "sdxl-controlnet-inpaint";
 export const ADAPTER_SDXL_FILL_CONTROLNET_UNION = "sdxl-fill-controlnet-union";
-export const DEFAULT_ADAPTER_ID = ADAPTER_SD15_INPAINT;
-export const DEFAULT_MODEL_ID =
-  "stable-diffusion-v1-5/stable-diffusion-inpainting";
-export const DEFAULT_CONTROLNET_MODEL_ID = "lllyasviel/control_v11f1e_sd15_tile";
+export const ADAPTER_SDXL_FILL_IP_REFINE = "sdxl-fill-ip-refine";
+export const DEFAULT_ADAPTER_ID = ADAPTER_SDXL_FILL_IP_REFINE;
+export const DEFAULT_MODEL_ID = "SG161222/RealVisXL_V5.0_Lightning";
+export const DEFAULT_CONTROLNET_MODEL_ID = "xinsir/controlnet-union-sdxl-1.0";
 export const DEFAULT_CANVAS_WIDTH = 1024;
 export const DEFAULT_CANVAS_HEIGHT = 768;
 export const DEFAULT_SELECTION_SIZE = 512;
@@ -15,6 +15,7 @@ export const DEFAULT_BRUSH_SIZE = 48;
 export const DEFAULT_ERASER_HARDNESS = 100;
 export const DEFAULT_CONTROL_GUIDE_COLOR = "#f59e0b";
 export const DEFAULT_CONTROL_GUIDE_STRENGTH = 100;
+export const CONTROLNET_GUIDE_UI_ENABLED = false;
 export const CONTROL_GUIDE_MASK_MODE_REPLACE = "replace_mask";
 export const CONTROL_GUIDE_MASK_MODE_PRESERVE = "preserve_original";
 export const DEFAULT_CONTROL_GUIDE_MASK_MODE = CONTROL_GUIDE_MASK_MODE_REPLACE;
@@ -118,6 +119,8 @@ export const RESULT_MODE_RESTORE_ORIGINAL_SOFT = "restore_original_soft";
 
 export const GENERATION_MODE_OUTPAINT = "outpaint";
 export const GENERATION_MODE_INPAINT = "inpaint";
+export const WORKSPACE_MODE_FREE_EDIT = "free_edit";
+export const WORKSPACE_MODE_EXPAND_IMAGE = "expand_image";
 export const OUTPAINT_STRATEGY_LOCAL_CONTEXT = "local_context";
 export const OUTPAINT_STRATEGY_SELECTED_FRAME = "selected_frame";
 export const OUTPAINT_STRATEGY_FULL_CONTEXT_CROP = "full_context_crop";
@@ -228,6 +231,10 @@ export type MaskStrokeMode = typeof STROKE_PAINT | typeof STROKE_ERASE;
 export type GenerationMode =
   | typeof GENERATION_MODE_OUTPAINT
   | typeof GENERATION_MODE_INPAINT;
+
+export type WorkspaceMode =
+  | typeof WORKSPACE_MODE_FREE_EDIT
+  | typeof WORKSPACE_MODE_EXPAND_IMAGE;
 
 export type OutpaintStrategy =
   | typeof OUTPAINT_STRATEGY_LOCAL_CONTEXT
