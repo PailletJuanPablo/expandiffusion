@@ -1,3 +1,5 @@
+import type { TranslateFunction } from '../i18n/i18n'
+
 export interface ControlOptionDetail {
   title: string
   badge?: string
@@ -251,12 +253,37 @@ const CONTROL_HELP: Record<string, ControlHelp> = {
   },
 }
 
-export function controlHelpFor(controlId: string): string | null {
-  return CONTROL_HELP[controlId]?.description ?? null
+export function controlHelpFor(controlId: string, t?: TranslateFunction): string | null {
+  const help = CONTROL_HELP[controlId]
+  if (!help) {
+    return null
+  }
+  return t ? t(`controlHelp.${controlId}.description`, {}, help.description) : help.description
 }
 
 export function controlOptionDetailsFor(
   controlId: string,
+  t?: TranslateFunction,
 ): Record<string, ControlOptionDetail> | undefined {
-  return CONTROL_HELP[controlId]?.optionDetails
+  const details = CONTROL_HELP[controlId]?.optionDetails
+  if (!details || !t) {
+    return details
+  }
+  return Object.fromEntries(
+    Object.entries(details).map(([id, detail]) => [
+      id,
+      {
+        ...detail,
+        title: t(`controlHelp.${controlId}.options.${id}.title`, {}, detail.title),
+        badge: detail.badge
+          ? t(`controlHelp.${controlId}.options.${id}.badge`, {}, detail.badge)
+          : detail.badge,
+        description: t(
+          `controlHelp.${controlId}.options.${id}.description`,
+          {},
+          detail.description,
+        ),
+      },
+    ]),
+  )
 }

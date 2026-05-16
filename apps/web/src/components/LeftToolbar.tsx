@@ -14,6 +14,7 @@ import {
   SlidersHorizontal,
   TextSearch,
   Upload,
+  WandSparkles,
 } from "lucide-react";
 import {
   useRef,
@@ -29,6 +30,7 @@ import {
   TOOL_ERASE,
   TOOL_PAN,
   TOOL_SELECT,
+  PLUGIN_TOOL_TARGET_CANVAS,
   PLUGIN_TOOL_TARGET_FRAME,
   PLUGIN_TOOL_TARGET_IMAGE,
   WORKSPACE_MODE_FREE_EDIT,
@@ -47,12 +49,14 @@ import {
   ONBOARDING_TARGET_TOOLBAR,
   ONBOARDING_TARGET_UPLOAD_BUTTON,
 } from "../lib/onboardingTour";
+import { useI18n } from "../i18n/useI18n";
 import { loadProjectArchive, saveProjectArchive } from "../lib/projectArchive";
 import { useEditorStore } from "../store/editorStore";
 import { TooltipButton } from "./TooltipButton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 export function LeftToolbar() {
+  const { t } = useI18n();
   const { pluginToolsQuery } = useStudioQueries();
   const tool = useEditorStore((state) => state.tool);
   const generationMode = useEditorStore((state) => state.generationMode);
@@ -126,15 +130,18 @@ export function LeftToolbar() {
     <>
       <aside
         className="left-toolbar"
-        aria-label="Editor tools"
+        aria-label={t("toolbar.editorTools")}
         data-tour-id={ONBOARDING_TARGET_TOOLBAR}
       >
-        <div className="toolbar-section" aria-label="Selection">
+        <div
+          className="toolbar-section toolbar-section-selection"
+          aria-label={t("toolbar.selection")}
+        >
           {renderToolbarItem(
             <ToolbarTool
               tool={TOOL_SELECT}
               currentTool={tool}
-              label="Select"
+              label={t("toolbar.select")}
               onSelect={setTool}
             >
               <MousePointer2 size={18} />
@@ -142,11 +149,14 @@ export function LeftToolbar() {
           )}
         </div>
         <div className="toolbar-divider" />
-        <div className="toolbar-section" aria-label="Generation actions">
+        <div
+          className="toolbar-section toolbar-section-generation"
+          aria-label={t("toolbar.generationActions")}
+        >
           {renderToolbarItem(
             <ToolbarAction
               active={generationMode === GENERATION_MODE_OUTPAINT}
-              label="Outpaint frame"
+              label={t("toolbar.outpaintFrame")}
               onSelect={() => {
                 setWorkspaceMode(WORKSPACE_MODE_FREE_EDIT);
                 setGenerationMode(GENERATION_MODE_OUTPAINT);
@@ -158,7 +168,7 @@ export function LeftToolbar() {
           {renderToolbarItem(
             <ToolbarAction
               active={generationMode === GENERATION_MODE_INPAINT}
-              label="Inpaint mask"
+              label={t("toolbar.inpaintMask")}
               onSelect={() => {
                 setWorkspaceMode(WORKSPACE_MODE_FREE_EDIT);
                 setGenerationMode(GENERATION_MODE_INPAINT);
@@ -171,7 +181,7 @@ export function LeftToolbar() {
             ? renderToolbarItem(
                 <ToolbarAction
                   active={tool === TOOL_CONTROL_GUIDE}
-                  label="Sketch guide"
+                  label={t("toolbar.sketchGuide")}
                   onSelect={() => setTool(TOOL_CONTROL_GUIDE)}
                 >
                   <Palette size={18} />
@@ -180,12 +190,15 @@ export function LeftToolbar() {
             : null}
         </div>
         <div className="toolbar-divider" />
-        <div className="toolbar-section" aria-label="Canvas tools">
+        <div
+          className="toolbar-section toolbar-section-canvas"
+          aria-label={t("toolbar.canvasTools")}
+        >
           {renderToolbarItem(
             <ToolbarTool
               tool={TOOL_PAN}
               currentTool={tool}
-              label="Pan"
+              label={t("toolbar.pan")}
               onSelect={setTool}
             >
               <Hand size={18} />
@@ -195,7 +208,7 @@ export function LeftToolbar() {
             <ToolbarTool
               tool={TOOL_ERASE}
               currentTool={tool}
-              label="Erase pixels"
+              label={t("toolbar.erasePixels")}
               onSelect={setTool}
             >
               <Eraser size={18} />
@@ -203,10 +216,13 @@ export function LeftToolbar() {
           )}
         </div>
         <div className="toolbar-divider" />
-        <div className="toolbar-section" aria-label="Image import">
+        <div
+          className="toolbar-section toolbar-section-import"
+          aria-label={t("toolbar.imageImport")}
+        >
           {renderToolbarItem(
             <ToolbarFileButton
-              label="Add images"
+              label={t("toolbar.addImages")}
               accept="image/*"
               multiple
               dataTourId={ONBOARDING_TARGET_UPLOAD_BUTTON}
@@ -219,7 +235,10 @@ export function LeftToolbar() {
         {pluginTools.length > 0 ? (
           <>
             <div className="toolbar-divider" />
-            <div className="toolbar-section" aria-label="Plugin tools">
+            <div
+              className="toolbar-section toolbar-section-plugins"
+              aria-label={t("toolbar.pluginTools")}
+            >
               {pluginTools.map((pluginTool) =>
                 renderToolbarItem(
                   <PluginToolbarTool
@@ -228,6 +247,9 @@ export function LeftToolbar() {
                     onSelect={() => {
                       if (pluginTool.target === PLUGIN_TOOL_TARGET_FRAME) {
                         setCanvasSelectionTarget({ kind: "frame" });
+                      }
+                      if (pluginTool.target === PLUGIN_TOOL_TARGET_CANVAS) {
+                        setCanvasSelectionTarget({ kind: "canvas" });
                       }
                       if (
                         pluginTool.target === PLUGIN_TOOL_TARGET_IMAGE &&
@@ -246,27 +268,27 @@ export function LeftToolbar() {
         ) : null}
         <div className="toolbar-spacer" />
         <div
-          className="toolbar-section toolbar-section-secondary"
-          aria-label="Edit history"
+          className="toolbar-section toolbar-section-secondary toolbar-section-history"
+          aria-label={t("toolbar.editHistory")}
         >
           {renderToolbarItem(
-            <TooltipButton label="Undo" onClick={undo}>
+            <TooltipButton label={t("toolbar.undo")} onClick={undo}>
               <RotateCcw size={18} />
             </TooltipButton>,
           )}
           {renderToolbarItem(
-            <TooltipButton label="Redo" onClick={redo}>
+            <TooltipButton label={t("toolbar.redo")} onClick={redo}>
               <RotateCw size={18} />
             </TooltipButton>,
           )}
         </div>
         <div
-          className="toolbar-section toolbar-section-secondary"
-          aria-label="Project files"
+          className="toolbar-section toolbar-section-secondary toolbar-section-project"
+          aria-label={t("toolbar.projectFiles")}
         >
           {renderToolbarItem(
             <TooltipButton
-              label="Save .expd project"
+              label={t("toolbar.saveProject")}
               onClick={() => {
                 saveProjectArchive(documentState).catch((error) =>
                   setErrorMessage(
@@ -282,7 +304,7 @@ export function LeftToolbar() {
           )}
           {renderToolbarItem(
             <ToolbarFileButton
-              label="Load .expd project"
+              label={t("toolbar.loadProject")}
               accept=".expd"
               onChange={loadProject}
             >
@@ -426,6 +448,9 @@ function renderPluginToolIcon(icon: string) {
   }
   if (icon === "sliders-horizontal") {
     return <SlidersHorizontal size={18} />;
+  }
+  if (icon === "wand-sparkles") {
+    return <WandSparkles size={18} />;
   }
   return <Puzzle size={18} />;
 }

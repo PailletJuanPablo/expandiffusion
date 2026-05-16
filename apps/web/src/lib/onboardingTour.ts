@@ -1,4 +1,5 @@
 import type { DocumentBounds, SelectionRect, ViewportState } from '../domain/types'
+import type { TranslateFunction } from '../i18n/i18n'
 
 export const ONBOARDING_STEP_WELCOME = 'welcome'
 export const ONBOARDING_STEP_LOAD_MODEL = 'load-model'
@@ -148,11 +149,11 @@ export const ONBOARDING_STEPS: OnboardingStepDefinition[] = [
     id: ONBOARDING_STEP_PREPARE_OUTPAINT,
     targetId: ONBOARDING_TARGET_CANVAS,
     kicker: 'Generation area',
-    title: 'Show the model where to continue',
-    body: 'The cyan frame marks the area that will be generated. Place it next to the image and overlap part of the original so the model can read edges, lighting, and texture.',
+    title: 'Use fixed expansion for the first generation',
+    body: 'Fixed expansion grows the whole image from the selected side or around it. Start here instead of a free frame so the first result uses the guided fixed-size workflow.',
     waitingBody: '',
     primaryAction: ONBOARDING_ACTION_USE_OUTPAINT,
-    primaryLabel: 'Use outpaint',
+    primaryLabel: 'Use fixed expansion',
   },
   {
     id: ONBOARDING_STEP_PROMPT,
@@ -175,6 +176,42 @@ export const ONBOARDING_STEPS: OnboardingStepDefinition[] = [
     primaryLabel: 'Generate when ready',
   },
 ]
+
+/**
+ * Return onboarding steps localized for the active locale.
+ *
+ * @param t - Active translator.
+ * @returns Localized onboarding step definitions.
+ */
+export function getLocalizedOnboardingSteps(t: TranslateFunction): OnboardingStepDefinition[] {
+  return [
+    localizeStep(ONBOARDING_STEPS[0], t, 'welcome'),
+    localizeStep(ONBOARDING_STEPS[1], t, 'loadModel'),
+    localizeStep(ONBOARDING_STEPS[2], t, 'tools'),
+    localizeStep(ONBOARDING_STEPS[3], t, 'upload'),
+    localizeStep(ONBOARDING_STEPS[4], t, 'imageFocus'),
+    localizeStep(ONBOARDING_STEPS[5], t, 'prepareOutpaint'),
+    localizeStep(ONBOARDING_STEPS[6], t, 'prompt'),
+    localizeStep(ONBOARDING_STEPS[7], t, 'generate'),
+  ]
+}
+
+function localizeStep(
+  step: OnboardingStepDefinition,
+  t: TranslateFunction,
+  key: string,
+): OnboardingStepDefinition {
+  return {
+    ...step,
+    kicker: t(`onboarding.steps.${key}.kicker`, {}, step.kicker),
+    title: t(`onboarding.steps.${key}.title`, {}, step.title),
+    body: t(`onboarding.steps.${key}.body`, {}, step.body),
+    waitingBody: step.waitingBody
+      ? t(`onboarding.steps.${key}.waiting`, {}, step.waitingBody)
+      : step.waitingBody,
+    primaryLabel: t(`onboarding.steps.${key}.primary`, {}, step.primaryLabel),
+  }
+}
 
 /**
  * Return completion and navigation availability for one onboarding step.

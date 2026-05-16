@@ -12,6 +12,7 @@ import {
   DEFAULT_CONTROL_GUIDE_STRENGTH,
   DEFAULT_CONTROLNET_MODEL_ID,
   DEFAULT_CANVAS_WIDTH,
+  DEFAULT_ERASER_MODE,
   DEFAULT_ERASER_HARDNESS,
   DEFAULT_MODEL_ID,
   DEFAULT_SELECTION_SIZE,
@@ -47,6 +48,7 @@ import {
   WORKSPACE_MODE_FREE_EDIT,
   type ControlGuideMaskMode,
   type EditorTool,
+  type EraserMode,
   type GenerationMode,
   type MaskStrokeMode,
   type OutpaintDirection,
@@ -76,6 +78,7 @@ interface EditorStoreActions {
   setViewport: (x: number, y: number, zoom: number) => void;
   setBrushSize: (size: number) => void;
   setEraserHardness: (hardness: number) => void;
+  setEraserMode: (mode: EraserMode) => void;
   setControlGuideEnabled: (enabled: boolean) => void;
   setControlGuideColor: (color: string) => void;
   setControlGuideStrength: (strength: number) => void;
@@ -100,6 +103,8 @@ interface EditorStoreActions {
   updateReference: (id: string, patch: Partial<ReferenceImageLayer>) => void;
   beginMaskStroke: (mode: MaskStrokeMode, point: Point) => void;
   appendMaskPoint: (point: Point) => void;
+  applySemanticMask: (maskDataUrl: string) => void;
+  commitFlattenedErase: (dataUrl: string) => void;
   clearMask: () => void;
   beginControlStroke: (point: Point) => void;
   appendControlPoint: (point: Point) => void;
@@ -154,6 +159,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   canvasSelectionTarget: { kind: "frame" },
   brushSize: DEFAULT_BRUSH_SIZE,
   eraserHardness: DEFAULT_ERASER_HARDNESS,
+  eraserMode: DEFAULT_ERASER_MODE,
   controlGuideEnabled: false,
   controlGuideColor: DEFAULT_CONTROL_GUIDE_COLOR,
   controlGuideStrength: DEFAULT_CONTROL_GUIDE_STRENGTH,
@@ -201,6 +207,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   setViewport: (x, y, zoom) => set({ viewport: { x, y, zoom } }),
   setBrushSize: (brushSize) => set({ brushSize }),
   setEraserHardness: (eraserHardness) => set({ eraserHardness }),
+  setEraserMode: (eraserMode) => set({ eraserMode }),
   setControlGuideEnabled: (controlGuideEnabled) => set({ controlGuideEnabled }),
   setControlGuideColor: (controlGuideColor) => set({ controlGuideColor }),
   setControlGuideStrength: (controlGuideStrength) =>
@@ -362,7 +369,41 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
   clearMask: () =>
     commitDocument(set, get, (documentState) => ({
       ...documentState,
+      semanticMaskDataUrl: null,
       maskStrokes: [],
+    })),
+  applySemanticMask: (semanticMaskDataUrl) => {
+    commitDocument(set, get, (documentState) => ({
+      ...documentState,
+      semanticMaskDataUrl,
+      maskStrokes: [],
+    }));
+    set((state) => ({
+      workspaceMode: WORKSPACE_MODE_FREE_EDIT,
+      generationMode: GENERATION_MODE_INPAINT,
+      tool: TOOL_INPAINT_MASK,
+      canvasSelectionTarget: { kind: "none" },
+      pluginPreview: null,
+      parameters:
+        state.parameters.result_mode === RESULT_MODE_GENERATED_SELECTION
+          ? { ...state.parameters, result_mode: RESULT_MODE_PRESERVE_KNOWN }
+          : state.parameters,
+    }));
+  },
+  commitFlattenedErase: (rasterDataUrl) =>
+    commitDocument(set, get, (documentState) => ({
+      ...documentState,
+      rasterDataUrl,
+      rasterBounds: {
+        x: 0,
+        y: 0,
+        width: documentState.width,
+        height: documentState.height,
+      },
+      semanticMaskDataUrl: null,
+      maskStrokes: [],
+      controlStrokes: [],
+      references: [],
     })),
   beginControlStroke: (point) =>
     commitDocument(set, get, (documentState) => ({
@@ -455,6 +496,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
             width: documentState.width,
             height: documentState.height,
           },
+          semanticMaskDataUrl: null,
           maskStrokes: [],
           controlStrokes: [],
           references: [],
@@ -474,6 +516,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
           height: bounds.height,
         },
         selection: shiftSelection(documentState.selection, shiftX, shiftY),
+        semanticMaskDataUrl: null,
         maskStrokes: [],
         controlStrokes: [],
         references: [],
@@ -591,6 +634,7 @@ function createInitialDocument(): EditorDocument {
     rasterBounds: null,
     selection: centerSelection(DEFAULT_CANVAS_WIDTH, DEFAULT_CANVAS_HEIGHT),
     maskStrokes: [],
+    semanticMaskDataUrl: null,
     controlStrokes: [],
     references: [],
   };

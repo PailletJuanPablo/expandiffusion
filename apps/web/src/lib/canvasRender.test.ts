@@ -26,11 +26,15 @@ import {
   planDirectionalOutpaintRender,
   directionalGeneratedBounds,
   composeSelectionResults,
+  eraseSemanticMaskFromDocument,
+  eraseRasterSelection,
   planHfSpaceFillExpansion,
   planOutpaintRender,
   prepareRasterImport,
   renderDocumentDataUrl,
   renderGenerationInputs,
+  renderPluginActionInput,
+  renderPluginMaskToDocumentMask,
 } from './canvasRender'
 
 class FakeCanvas {
@@ -38,6 +42,7 @@ class FakeCanvas {
   private canvasHeight = 0
   pixels = new Uint8ClampedArray()
   lastPaintStyle: string | null = null
+  lastTransparentPixels: number | null = null
 
   get width(): number {
     return this.canvasWidth
@@ -63,11 +68,15 @@ class FakeCanvas {
 
   toDataURL(): string {
     const style = this.lastPaintStyle ? `:${this.lastPaintStyle}` : ''
-    return `data:image/png;base64,${this.width}x${this.height}${style}`
+    const transparent = this.lastTransparentPixels === null
+      ? ''
+      : `:transparent=${this.lastTransparentPixels}`
+    return `data:image/png;base64,${this.width}x${this.height}${style}${transparent}`
   }
 
   private resetPixels(): void {
     this.pixels = new Uint8ClampedArray(this.canvasWidth * this.canvasHeight * 4)
+    this.lastTransparentPixels = null
   }
 }
 
@@ -89,13 +98,36 @@ class FakeCanvasContext {
     this.canvas.pixels.fill(0)
   }
 
-  fillRect(): void {
-    for (let index = 0; index < this.canvas.pixels.length; index += 4) {
-      this.canvas.pixels[index + 3] = 255
+  fillRect(x = 0, y = 0, width = this.canvas.width, height = this.canvas.height): void {
+    const left = Math.max(0, Math.round(x))
+    const top = Math.max(0, Math.round(y))
+    const right = Math.min(this.canvas.width, Math.round(x + width))
+    const bottom = Math.min(this.canvas.height, Math.round(y + height))
+    let transparentPixels = 0
+    for (let row = top; row < bottom; row += 1) {
+      for (let column = left; column < right; column += 1) {
+        const index = (row * this.canvas.width + column) * 4
+        if (this.globalCompositeOperation === 'destination-out') {
+          this.canvas.pixels[index + 3] = 0
+          transparentPixels += 1
+        } else {
+          this.canvas.pixels[index + 3] = 255
+        }
+      }
+    }
+    if (this.globalCompositeOperation === 'destination-out') {
+      this.canvas.lastTransparentPixels = transparentPixels
     }
   }
 
   drawImage(_image: unknown, ...args: number[]): void {
+    const paintStyle =
+      typeof _image === 'object' &&
+      _image !== null &&
+      'paintStyle' in _image &&
+      typeof _image.paintStyle === 'string'
+        ? hexToRgb(_image.paintStyle)
+        : [32, 32, 36]
     const destination = destinationRectFromDrawImageArgs(
       args,
       this.canvas.width,
@@ -105,14 +137,26 @@ class FakeCanvasContext {
     const top = Math.max(0, Math.round(destination.y))
     const right = Math.min(this.canvas.width, Math.round(destination.x + destination.width))
     const bottom = Math.min(this.canvas.height, Math.round(destination.y + destination.height))
+    let transparentPixels = 0
     for (let y = top; y < bottom; y += 1) {
       for (let x = left; x < right; x += 1) {
         const index = (y * this.canvas.width + x) * 4
-        this.canvas.pixels[index] = 32
-        this.canvas.pixels[index + 1] = 32
-        this.canvas.pixels[index + 2] = 36
+        if (this.globalCompositeOperation === 'destination-out') {
+          const sourceAlpha = sourceAlphaAt(_image, x - left, y - top, destination)
+          if (sourceAlpha > 0) {
+            this.canvas.pixels[index + 3] = 0
+            transparentPixels += 1
+          }
+          continue
+        }
+        this.canvas.pixels[index] = paintStyle[0]
+        this.canvas.pixels[index + 1] = paintStyle[1]
+        this.canvas.pixels[index + 2] = paintStyle[2]
         this.canvas.pixels[index + 3] = 255
       }
+    }
+    if (this.globalCompositeOperation === 'destination-out') {
+      this.canvas.lastTransparentPixels = transparentPixels
     }
   }
 
@@ -134,7 +178,9 @@ class FakeCanvasContext {
     } as ImageData
   }
 
-  putImageData(): void {}
+  putImageData(imageData: ImageData): void {
+    this.canvas.pixels.set(imageData.data)
+  }
   save(): void {}
   restore(): void {}
   beginPath(): void {}
@@ -149,9 +195,18 @@ class FakeCanvasContext {
   }
 }
 
+function hexToRgb(value: string): [number, number, number] {
+  return [
+    Number.parseInt(value.slice(1, 3), 16),
+    Number.parseInt(value.slice(3, 5), 16),
+    Number.parseInt(value.slice(5, 7), 16),
+  ]
+}
+
 class FakeImage {
   naturalWidth = 128
   naturalHeight = 128
+  paintStyle = '#202024'
   onload: (() => void) | null = null
   onerror: (() => void) | null = null
 
@@ -160,6 +215,10 @@ class FakeImage {
     if (size) {
       this.naturalWidth = Number.parseInt(size[1], 10)
       this.naturalHeight = Number.parseInt(size[2], 10)
+    }
+    const style = value.match(/:(#[a-fA-F0-9]{6})$/)
+    if (style) {
+      this.paintStyle = style[1]
     }
     queueMicrotask(() => this.onload?.())
   }
@@ -180,6 +239,20 @@ function destinationRectFromDrawImageArgs(
     return { x: args[0], y: args[1], width: canvasWidth, height: canvasHeight }
   }
   return { x: 0, y: 0, width: canvasWidth, height: canvasHeight }
+}
+
+function sourceAlphaAt(
+  image: unknown,
+  x: number,
+  y: number,
+  destination: { width: number; height: number },
+): number {
+  if (image instanceof FakeCanvas) {
+    const sourceX = Math.max(0, Math.min(image.width - 1, Math.floor(x * image.width / destination.width)))
+    const sourceY = Math.max(0, Math.min(image.height - 1, Math.floor(y * image.height / destination.height)))
+    return image.pixels[(sourceY * image.width + sourceX) * 4 + 3]
+  }
+  return 255
 }
 
 describe('canvasRender', () => {
@@ -292,6 +365,7 @@ describe('canvasRender', () => {
       rasterDataUrl: 'data:image/png;base64,raster',
       rasterBounds: { x: 70, y: 55, width: 80, height: 40 },
       selection: { x: 0, y: 0, width: 128, height: 128 },
+      semanticMaskDataUrl: null,
       maskStrokes: [],
       controlStrokes: [],
       references: [],
@@ -521,6 +595,7 @@ describe('canvasRender', () => {
       rasterDataUrl: 'data:image/png;base64,raster',
       rasterBounds: { x: -665, y: 0, width: 700, height: 600 },
       selection: { x: -398, y: 0, width: 1500, height: 600 },
+      semanticMaskDataUrl: null,
       maskStrokes: [],
       controlStrokes: [],
       references: [],
@@ -545,6 +620,7 @@ describe('canvasRender', () => {
       rasterDataUrl: 'data:image/png;base64,raster',
       rasterBounds: { x: 100, y: 50, width: 700, height: 600 },
       selection: { x: 0, y: 0, width: 128, height: 128 },
+      semanticMaskDataUrl: null,
       maskStrokes: [],
       controlStrokes: [],
       references: [],
@@ -601,6 +677,7 @@ describe('canvasRender', () => {
       rasterDataUrl: 'data:image/png;base64,raster',
       rasterBounds: { x: 100, y: 50, width: 800, height: 600 },
       selection: { x: 0, y: 0, width: 128, height: 128 },
+      semanticMaskDataUrl: null,
       maskStrokes: [],
       controlStrokes: [],
       references: [],
@@ -668,6 +745,7 @@ describe('canvasRender', () => {
       rasterDataUrl: 'data:image/png;base64,raster',
       rasterBounds: { x: 512, y: 512, width: 1920, height: 1080 },
       selection: { x: 0, y: 0, width: 512, height: 512 },
+      semanticMaskDataUrl: null,
       maskStrokes: [],
       controlStrokes: [],
       references: [],
@@ -736,6 +814,17 @@ describe('canvasRender', () => {
     expect(Array.from(guideImage.data.slice(4, 8))).toEqual([20, 30, 40, 255])
   })
 
+  it('erases a rectangular raster selection to transparency', async () => {
+    const dataUrl = await eraseRasterSelection(documentWithGuide(), {
+      x: 16,
+      y: 20,
+      width: 24,
+      height: 12,
+    })
+
+    expect(dataUrl).toBe('data:image/png;base64,128x128:transparent=288')
+  })
+
   it('omits the control guide when ControlNet sketch is disabled', async () => {
     const documentState = documentWithGuide()
 
@@ -783,6 +872,58 @@ describe('canvasRender', () => {
       image: 'data:image/png;base64,128x128:#1e88e5',
     })
   })
+
+  it('renders the visible canvas as a plugin canvas target with click metadata', async () => {
+    const input = await renderPluginActionInput(documentWithGuide(), {
+      kind: 'canvas',
+      point: { x: 64, y: 68 },
+    })
+
+    expect(input.image).toBe('data:image/png;base64,128x128')
+    expect(input.target).toMatchObject({
+      kind: 'canvas',
+      bounds: { x: 0, y: 0, width: 128, height: 128 },
+      scale: 1,
+      point: { x: 64, y: 68 },
+    })
+    expect(input.target.visible_mask).toBe('data:image/png;base64,128x128')
+  })
+
+  it('uses a semantic object mask as an inpaint mask without brush strokes', async () => {
+    const documentState = {
+      ...documentWithGuide(),
+      maskStrokes: [],
+      semanticMaskDataUrl: 'data:image/png;base64,128x128:#ffffff',
+    }
+
+    const inputs = await renderGenerationInputs(documentState, GENERATION_MODE_INPAINT)
+
+    expect(inputs.selection).toEqual({ x: 0, y: 0, width: 128, height: 128 })
+    expect(inputs.mask).toBe('data:image/png;base64,128x128')
+  })
+
+  it('maps a plugin canvas mask back to document dimensions', async () => {
+    const mask = await renderPluginMaskToDocumentMask(
+      documentWithGuide(),
+      'data:image/png;base64,64x64:#ffffff',
+      {
+        kind: 'canvas',
+        bounds: { x: 32, y: 16, width: 64, height: 64 },
+        scale: 1,
+      },
+    )
+
+    expect(mask).toBe('data:image/png;base64,128x128')
+  })
+
+  it('does not erase document pixels from black semantic mask areas', async () => {
+    const erased = await eraseSemanticMaskFromDocument(
+      documentWithGuide(),
+      'data:image/png;base64,128x128:#000000',
+    )
+
+    expect(erased).toBe('data:image/png;base64,128x128:transparent=0')
+  })
 })
 
 function documentWithGuide(): EditorDocument {
@@ -793,6 +934,7 @@ function documentWithGuide(): EditorDocument {
     rasterDataUrl: 'data:image/png;base64,raster',
     rasterBounds: { x: 0, y: 0, width: 128, height: 128 },
     selection: { x: 0, y: 0, width: 128, height: 128 },
+    semanticMaskDataUrl: null,
     maskStrokes: [
       {
         id: 'mask',

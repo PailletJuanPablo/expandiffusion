@@ -1,6 +1,7 @@
 import { ChevronDown, ChevronRight, Power, PowerOff, SlidersHorizontal } from 'lucide-react'
 import { useState } from 'react'
 import type { ControlSchema, GenerationParameters, PluginInfo, PostprocessorInfo } from '../domain/types'
+import { useI18n } from '../i18n/useI18n'
 import { correctionPostprocessors } from '../lib/correctionPipeline'
 import { isGenerationControlDisabled } from '../lib/controlSchemas'
 import { SchemaControl } from './SchemaControl'
@@ -25,6 +26,7 @@ export function PluginManagerSection({
   onToggle,
   onParameterChange,
 }: PluginManagerSectionProps) {
+  const { t } = useI18n()
   const [expandedPluginId, setExpandedPluginId] = useState<string | null>(null)
   const correctionPluginIds = new Set(
     correctionPostprocessors(postprocessors)
@@ -34,7 +36,7 @@ export function PluginManagerSection({
   if (plugins.length === 0) {
     return (
       <section className="panel-section panel-section-compact">
-        <div className="persistence-empty">No plugins found.</div>
+        <div className="persistence-empty">{t('plugins.noneFound')}</div>
       </section>
     )
   }
@@ -59,15 +61,19 @@ export function PluginManagerSection({
                 <div className="plugin-card-actions">
                   <span className={pluginStateClass(plugin)}>
                     <span />
-                    {pluginStatus(plugin)}
+                    <PluginStatus plugin={plugin} />
                   </span>
                   <button
                     type="button"
                     className={plugin.enabled ? 'plugin-switch plugin-switch-on' : 'plugin-switch'}
                     disabled={pendingPluginId === plugin.id}
                     aria-pressed={plugin.enabled}
-                    aria-label={plugin.enabled ? `Disable ${plugin.label}` : `Enable ${plugin.label}`}
-                    title={plugin.enabled ? 'Disable plugin' : 'Enable plugin'}
+                    aria-label={
+                      plugin.enabled
+                        ? t('plugins.disable', { label: plugin.label })
+                        : t('plugins.enable', { label: plugin.label })
+                    }
+                    title={plugin.enabled ? t('plugins.disablePlugin') : t('plugins.enablePlugin')}
                     onClick={() => onToggle(plugin)}
                   >
                     {plugin.enabled ? <PowerOff size={14} /> : <Power size={14} />}
@@ -77,8 +83,12 @@ export function PluginManagerSection({
                     variant="ghost"
                     size="smallIcon"
                     disabled={pluginControls.length === 0}
-                    aria-label={expanded ? `Hide ${plugin.label} controls` : `Show ${plugin.label} controls`}
-                    title={pluginControls.length === 0 ? 'No controls' : 'Plugin controls'}
+                    aria-label={
+                      expanded
+                        ? t('plugins.hideControls', { label: plugin.label })
+                        : t('plugins.showControls', { label: plugin.label })
+                    }
+                    title={pluginControls.length === 0 ? t('plugins.noControls') : t('plugins.pluginControls')}
                     onClick={() =>
                       setExpandedPluginId((current) => current === plugin.id ? null : plugin.id)
                     }
@@ -91,7 +101,7 @@ export function PluginManagerSection({
                 <div className="plugin-control-panel">
                   <div className="plugin-control-heading">
                     <SlidersHorizontal size={15} />
-                    <span>Controls</span>
+                    <span>{t('common.controls')}</span>
                   </div>
                   <PluginControls
                     controls={pluginControls}
@@ -109,14 +119,15 @@ export function PluginManagerSection({
   )
 }
 
-function pluginStatus(plugin: PluginInfo): string {
+function PluginStatus({ plugin }: { plugin: PluginInfo }) {
+  const { t } = useI18n()
   if (plugin.enabled && plugin.loaded) {
-    return 'Enabled'
+    return t('common.enabled')
   }
   if (plugin.enabled) {
-    return 'Load error'
+    return t('common.loadError')
   }
-  return 'Disabled'
+  return t('common.disabled')
 }
 
 function pluginCardClass(plugin: PluginInfo): string {

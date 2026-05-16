@@ -7,7 +7,8 @@ import {
   MODEL_SOURCE_LOCAL_FOLDER,
 } from '../constants/domain'
 import type { AdapterInfo, ModelSourceSchema } from '../domain/types'
-import { buildModelLoadRequest, getActiveModelSource } from './modelSources'
+import { LOCALE_ES, createTranslator } from '../i18n/i18n'
+import { buildModelLoadRequest, getActiveModelSource, getModelSources } from './modelSources'
 
 describe('modelSources', () => {
   it('uses adapter-provided source schemas', () => {
@@ -131,6 +132,15 @@ describe('modelSources', () => {
     ).toMatchObject({
       controlnet_model_id: DEFAULT_CONTROLNET_MODEL_ID,
     })
+  })
+
+  it('localizes fallback source labels when the adapter has no source schemas', () => {
+    const t = createTranslator(LOCALE_ES)
+    const sources = getModelSources(adapterWithSources([]), t)
+
+    expect(sources[0].label).toBe('ID de modelo en Hugging Face')
+    expect(sources[1].label).toBe('Carpeta local de Diffusers')
+    expect(sources[2].label).toBe('Archivo local de punto de control')
   })
 })
 

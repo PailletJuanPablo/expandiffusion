@@ -550,28 +550,48 @@ textarea:focus {
   flex: 1;
 }
 
-.toolbar-section[aria-label="Selection"] .ui-button svg {
-  color: var(--color-accent-sky);
+.toolbar-section-selection .ui-button svg {
+  color: #2f6f9f;
 }
 
-.toolbar-section[aria-label="Generation actions"] .ui-button:nth-child(1) svg {
-  color: var(--color-accent);
+.toolbar-section-generation .toolbar-item:nth-child(1) .ui-button svg {
+  color: #0f9faa;
 }
 
-.toolbar-section[aria-label="Generation actions"] .ui-button:nth-child(2) svg {
-  color: var(--color-accent-violet);
+.toolbar-section-generation .toolbar-item:nth-child(2) .ui-button svg {
+  color: #7a67d8;
 }
 
-.toolbar-section[aria-label="Canvas tools"] .ui-button:nth-child(1) svg {
-  color: var(--color-accent-blue);
+.toolbar-section-generation .toolbar-item:nth-child(3) .ui-button svg {
+  color: #c47a18;
 }
 
-.toolbar-section[aria-label="Canvas tools"] .ui-button:nth-child(2) svg {
-  color: var(--color-accent-rose);
+.toolbar-section-canvas .toolbar-item:nth-child(1) .ui-button svg {
+  color: #536fda;
 }
 
-.toolbar-section[aria-label="Modules"] .ui-button svg {
-  color: var(--color-accent-violet);
+.toolbar-section-canvas .toolbar-item:nth-child(2) .ui-button svg {
+  color: #d45178;
+}
+
+.toolbar-section-import .icon-file-button svg {
+  color: #2a8eb8;
+}
+
+.toolbar-section-history .toolbar-item:nth-child(1) .ui-button svg {
+  color: #60758f;
+}
+
+.toolbar-section-history .toolbar-item:nth-child(2) .ui-button svg {
+  color: #58708a;
+}
+
+.toolbar-section-project .toolbar-item:nth-child(1) .ui-button svg {
+  color: #526b86;
+}
+
+.toolbar-section-project .toolbar-item:nth-child(2) .icon-file-button svg {
+  color: #5d7591;
 }
 
 .toolbar-item {
@@ -699,11 +719,6 @@ textarea:focus {
   white-space: nowrap;
 }
 
-.toolbar-section[aria-label="Image import"] .icon-file-button svg,
-.toolbar-section[aria-label="Project files"] .icon-file-button svg {
-  color: var(--color-accent-sky);
-}
-
 .studio-topbar {
   grid-column: 1;
   grid-row: 1;
@@ -739,6 +754,29 @@ textarea:focus {
   gap: 10px;
   align-items: center;
   justify-self: end;
+}
+
+.language-selector {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  color: var(--color-text-muted);
+  font-size: 9px;
+  font-weight: 760;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.language-selector select {
+  height: 30px;
+  min-width: 58px;
+  border: 1px solid rgba(148, 163, 184, 0.38);
+  border-radius: var(--radius-control);
+  color: var(--color-text-strong);
+  background: rgba(255, 255, 255, 0.82);
+  font-size: 12px;
+  font-weight: 760;
 }
 
 .outpaint-method-switch {
@@ -1148,22 +1186,82 @@ textarea:focus {
 
 .render-scale-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 6px;
 }
 
+.workflow-icon-option {
+  justify-content: flex-start;
+  min-height: 38px;
+  padding: 0 8px;
+}
+
+.workflow-icon-option-copy {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+  text-align: left;
+  line-height: 1.05;
+}
+
+.workflow-icon-option-copy span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workflow-icon-option-copy small {
+  color: var(--color-text-muted);
+  font-size: 10px;
+  font-weight: 760;
+}
+
+.fixed-expand-group-heading,
 .fixed-expand-toggle-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+}
+
+.fixed-expand-group-heading {
+  color: var(--color-text-strong);
+  font-size: 12px;
+  font-weight: 780;
+}
+
+.fixed-expand-group-heading strong {
+  color: var(--color-text-strong);
+  font-size: 12px;
+  font-weight: 820;
+}
+
+.fixed-expand-toggle-row {
   color: var(--color-text-secondary);
   font-size: 11px;
   font-weight: 720;
 }
 
+.fixed-expand-overlap-field {
+  display: grid;
+  gap: 6px;
+}
+
+.fixed-expand-overlap-sides {
+  display: grid;
+  gap: 6px;
+}
+
+.fixed-expand-overlap-sides > span {
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  font-weight: 720;
+}
+
+.fixed-expand-group-heading .expand-overlap-toggle,
 .fixed-expand-toggle-row .expand-overlap-toggle {
-  width: 48px;
+  width: 34px;
+  min-height: 28px;
 }
 
 .expand-direction-grid {
@@ -1173,9 +1271,11 @@ textarea:focus {
 }
 
 .expand-direction-option {
+  display: inline-grid;
+  place-items: center;
   min-width: 0;
   min-height: 34px;
-  padding: 0 8px;
+  padding: 0;
   border: 1px solid var(--color-border-control);
   border-radius: var(--radius-control);
   color: var(--color-text-secondary);
@@ -1201,8 +1301,11 @@ textarea:focus {
 }
 
 .expand-overlap-toggle {
+  display: inline-grid;
+  place-items: center;
   min-width: 0;
   min-height: 30px;
+  padding: 0;
   border: 1px solid var(--color-border-control);
   border-radius: 7px;
   color: var(--color-text-secondary);

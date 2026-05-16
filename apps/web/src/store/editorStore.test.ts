@@ -6,6 +6,8 @@ import {
   DEFAULT_CONTROL_GUIDE_MASK_MODE,
   DEFAULT_CONTROL_GUIDE_STRENGTH,
   DEFAULT_ADAPTER_ID,
+  ERASER_MODE_BRUSH,
+  ERASER_MODE_RECTANGLE,
   CONTROL_GUIDE_MASK_MODE_PRESERVE,
   FILL_EDGE_EXTEND,
   FILL_TRANSPARENT,
@@ -58,6 +60,14 @@ describe("editorStore", () => {
 
     expect(useEditorStore.getState().controlGuideEnabled).toBe(true);
     expect(useEditorStore.getState().generationMode).toBe(GENERATION_MODE_INPAINT);
+  });
+
+  it("keeps the eraser on brush mode by default and can switch to rectangle mode", () => {
+    expect(useEditorStore.getState().eraserMode).toBe(ERASER_MODE_BRUSH);
+
+    useEditorStore.getState().setEraserMode(ERASER_MODE_RECTANGLE);
+
+    expect(useEditorStore.getState().eraserMode).toBe(ERASER_MODE_RECTANGLE);
   });
 
   it("applies adapter generation defaults when the adapter changes", () => {
@@ -271,6 +281,7 @@ describe("editorStore", () => {
     useEditorStore.setState((state) => ({
       document: {
         ...state.document,
+        semanticMaskDataUrl: "data:image/png;base64,semantic-mask",
         maskStrokes: [],
         controlStrokes: [],
       },
@@ -300,8 +311,84 @@ describe("editorStore", () => {
 
     useEditorStore.getState().clearControlGuide();
 
+    expect(useEditorStore.getState().document.semanticMaskDataUrl).toBe(
+      "data:image/png;base64,semantic-mask",
+    );
     expect(useEditorStore.getState().document.maskStrokes).toHaveLength(1);
     expect(useEditorStore.getState().document.controlStrokes).toHaveLength(0);
+  });
+
+  it("applies and clears a semantic inpaint mask", () => {
+    useEditorStore.setState((state) => ({
+      generationMode: GENERATION_MODE_OUTPAINT,
+      tool: TOOL_SELECT,
+      document: {
+        ...state.document,
+        semanticMaskDataUrl: null,
+        maskStrokes: [],
+      },
+    }));
+
+    useEditorStore.getState().applySemanticMask("data:image/png;base64,mask");
+
+    expect(useEditorStore.getState().generationMode).toBe(GENERATION_MODE_INPAINT);
+    expect(useEditorStore.getState().tool).toBe(TOOL_INPAINT_MASK);
+    expect(useEditorStore.getState().document.semanticMaskDataUrl).toBe(
+      "data:image/png;base64,mask",
+    );
+
+    useEditorStore.getState().clearMask();
+
+    expect(useEditorStore.getState().document.semanticMaskDataUrl).toBeNull();
+    expect(useEditorStore.getState().document.maskStrokes).toHaveLength(0);
+  });
+
+  it("commits a flattened semantic erase into the raster document", () => {
+    useEditorStore.setState((state) => ({
+      document: {
+        ...state.document,
+        width: 320,
+        height: 240,
+        rasterDataUrl: "data:image/png;base64,old",
+        rasterBounds: { x: 10, y: 20, width: 120, height: 90 },
+        semanticMaskDataUrl: "data:image/png;base64,mask",
+        maskStrokes: [
+          {
+            id: "mask",
+            mode: "paint",
+            size: 24,
+            points: [{ x: 8, y: 12 }],
+          },
+        ],
+        references: [
+          {
+            id: "reference",
+            dataUrl: "data:image/png;base64,reference",
+            x: 30,
+            y: 40,
+            width: 50,
+            height: 60,
+            opacity: 0.5,
+          },
+        ],
+      },
+    }));
+
+    useEditorStore.getState().commitFlattenedErase("data:image/png;base64,erased");
+
+    expect(useEditorStore.getState().document.rasterDataUrl).toBe(
+      "data:image/png;base64,erased",
+    );
+    expect(useEditorStore.getState().document.rasterBounds).toEqual({
+      x: 0,
+      y: 0,
+      width: 320,
+      height: 240,
+    });
+    expect(useEditorStore.getState().document.references).toHaveLength(0);
+    expect(useEditorStore.getState().document.semanticMaskDataUrl).toBeNull();
+    expect(useEditorStore.getState().document.maskStrokes).toHaveLength(0);
+    expect(useEditorStore.getState().undoStack.length).toBeGreaterThan(0);
   });
 
   it("updates the active control guide color", () => {

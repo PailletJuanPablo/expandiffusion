@@ -7,6 +7,7 @@ import {
   FILL_PERLIN_NOISE,
   FILL_TRANSPARENT,
 } from '../constants/domain'
+import type { TranslateFunction } from '../i18n/i18n'
 
 export interface PreprocessorDetails {
   title: string
@@ -74,6 +75,34 @@ export const PREPROCESSOR_DETAILS: Record<string, PreprocessorDetails> = {
  * @param id - Technical fill mode id.
  * @returns Preprocessor details or null for adapter-provided custom modes.
  */
-export function preprocessorDetailsFor(id: string): PreprocessorDetails | null {
-  return PREPROCESSOR_DETAILS[id] ?? null
+export function preprocessorDetailsFor(id: string, t?: TranslateFunction): PreprocessorDetails | null {
+  const details = PREPROCESSOR_DETAILS[id]
+  if (!details) {
+    return null
+  }
+  if (!t) {
+    return details
+  }
+  return {
+    title: t(`preprocessor.${id}.title`, {}, details.title),
+    badge: t(`preprocessor.${id}.badge`, {}, details.badge),
+    description: t(`preprocessor.${id}.description`, {}, details.description),
+    bestFor: t(`preprocessor.${id}.bestFor`, {}, details.bestFor),
+    caution: t(`preprocessor.${id}.caution`, {}, details.caution),
+  }
+}
+
+/**
+ * Return localized details for every built-in fill preprocessor.
+ *
+ * @param t - Active translator.
+ * @returns Localized detail map.
+ */
+export function localizedPreprocessorDetails(t: TranslateFunction): Record<string, PreprocessorDetails> {
+  return Object.fromEntries(
+    Object.keys(PREPROCESSOR_DETAILS).map((id) => [
+      id,
+      preprocessorDetailsFor(id, t) ?? PREPROCESSOR_DETAILS[id],
+    ]),
+  )
 }

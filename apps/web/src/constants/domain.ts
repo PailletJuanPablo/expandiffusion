@@ -13,6 +13,9 @@ export const DEFAULT_CANVAS_HEIGHT = 768;
 export const DEFAULT_SELECTION_SIZE = 512;
 export const DEFAULT_BRUSH_SIZE = 48;
 export const DEFAULT_ERASER_HARDNESS = 100;
+export const ERASER_MODE_BRUSH = "brush";
+export const ERASER_MODE_RECTANGLE = "rectangle";
+export const DEFAULT_ERASER_MODE = ERASER_MODE_BRUSH;
 export const DEFAULT_CONTROL_GUIDE_COLOR = "#f59e0b";
 export const DEFAULT_CONTROL_GUIDE_STRENGTH = 100;
 export const CONTROLNET_GUIDE_UI_ENABLED = false;
@@ -80,6 +83,7 @@ export const POSTPROCESSOR_CATEGORY_CORRECTION = "correction";
 export const PLUGIN_ACTION_MENU_SELECTION = "selection";
 export const PLUGIN_TOOL_TARGET_FRAME = "frame";
 export const PLUGIN_TOOL_TARGET_IMAGE = "image";
+export const PLUGIN_TOOL_TARGET_CANVAS = "canvas";
 
 export const TOOL_SELECT = "select";
 export const TOOL_OUTPAINT_FRAME = "outpaint_frame";
@@ -227,6 +231,10 @@ export type PluginEditorTool = `${typeof PLUGIN_TOOL_PREFIX}${string}`;
 export type EditorTool = BuiltInEditorTool | PluginEditorTool;
 
 export type MaskStrokeMode = typeof STROKE_PAINT | typeof STROKE_ERASE;
+
+export type EraserMode =
+  | typeof ERASER_MODE_BRUSH
+  | typeof ERASER_MODE_RECTANGLE;
 
 export type GenerationMode =
   | typeof GENERATION_MODE_OUTPAINT

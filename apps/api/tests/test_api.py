@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import json
+import os
 import sys
 import threading
 import time
@@ -56,6 +56,7 @@ from expandiffusion.schemas import (
     ModelInfo,
     ModelLoadRequest,
     OutpaintRequest,
+    PluginActionResult,
     PluginActionRunRequest,
 )
 from expandiffusion.services import (
@@ -71,6 +72,17 @@ client = TestClient(app)
 def _data_url(color: tuple[int, int, int, int]) -> str:
     image = Image.new("RGBA", (96, 96), color)
     return encode_png_data_url(image)
+
+
+def _solid_data_url(size: tuple[int, int], color: tuple[int, int, int, int]) -> str:
+    image = Image.new("RGBA", size, color)
+    return encode_png_data_url(image)
+
+
+def _mask_data_url(size: tuple[int, int], box: tuple[int, int, int, int]) -> str:
+    mask = Image.new("L", size, 0)
+    mask.paste(255, box)
+    return encode_png_data_url(mask)
 
 
 def _half_transparent_image(width: int, height: int, split_x: int) -> Image.Image:
@@ -1657,6 +1669,205 @@ def test_included_image_to_text_plugin_loads() -> None:
         and tool.controls == []
         for tool in tools.tool_infos()
     )
+
+
+def test_plugin_action_result_can_return_mask() -> None:
+    result = PluginActionResult(
+        action_id="sample-action",
+        mask=_mask_data_url((8, 8), (2, 2, 6, 6)),
+    )
+
+    assert decode_data_url(result.mask).convert("L").getpixel((3, 3)) == 255
+
+
+def test_included_object_selector_plugin_loads(tmp_path) -> None:
+    registry = AdapterRegistry()
+    postprocessors = GenerationPostprocessorRegistry()
+    actions = PluginActionRegistry()
+    tools = PluginToolRegistry()
+    persistence = PersistenceStore(tmp_path / "app_state.json")
+    manager = PluginManager(
+        registry,
+        postprocessors,
+        persistence,
+        constants.DEFAULT_PLUGIN_DIR,
+        actions,
+        tools,
+    )
+
+    plugins = manager.load_all()
+
+    object_selector = next(plugin for plugin in plugins if plugin.id == "object-selector")
+    tool = next(item for item in tools.tool_infos() if item.id == "object-selector")
+    assert object_selector.loaded is True
+    assert object_selector.action_ids == ["object-selector"]
+    assert object_selector.tool_ids == ["object-selector"]
+    assert tool.action_id == "object-selector"
+    assert tool.icon == "wand-sparkles"
+    assert tool.target == constants.PLUGIN_TOOL_TARGET_CANVAS
+
+
+def test_object_selector_prompt_click_returns_visible_mask(tmp_path, monkeypatch) -> None:
+    manager = _object_selector_manager(tmp_path)
+    module = sys.modules["expandiffusion_plugin_object_selector"]
+
+    monkeypatch.setattr(
+        module,
+        "_detect_prompt_boxes",
+        lambda _image, prompt: [
+            {"box": (0, 1, 3, 6), "label": prompt, "confidence": 0.4},
+            {"box": (4, 1, 8, 6), "label": prompt, "confidence": 0.9},
+        ],
+    )
+
+    records = {}
+
+    def fake_segment_mask(image, box, point):
+        records["box"] = box
+        records["point"] = point
+        mask = Image.new("L", image.size, 0)
+        mask.paste(255, box)
+        return mask, 0.82
+
+    monkeypatch.setattr(module, "_segment_mask", fake_segment_mask)
+
+    result = manager.run_action(
+        "object-selector",
+        PluginActionRunRequest(
+            image=_solid_data_url((8, 8), (10, 20, 30, 255)),
+            controls={"object_selector_prompt": "cup"},
+            target={
+                "kind": "canvas",
+                "bounds": {"x": 10, "y": 20, "width": 8, "height": 8},
+                "scale": 1,
+                "point": {"x": 6, "y": 4},
+                "visible_mask": _mask_data_url((8, 8), (5, 0, 8, 8)),
+            },
+        ),
+    )
+
+    mask = decode_data_url(result.mask).convert("L")
+    assert records == {"box": (4, 1, 8, 6), "point": (6, 4)}
+    assert mask.size == (8, 8)
+    assert mask.getpixel((4, 3)) == 0
+    assert mask.getpixel((6, 3)) == 255
+    assert result.data["boxes"][0]["label"] == "cup"
+    assert result.data["source"] == "prompt_and_click"
+
+
+def test_object_selector_click_only_uses_point_prompt(tmp_path, monkeypatch) -> None:
+    manager = _object_selector_manager(tmp_path)
+    module = sys.modules["expandiffusion_plugin_object_selector"]
+    records = {}
+
+    def fake_segment_mask(image, box, point):
+        records["box"] = box
+        records["point"] = point
+        mask = Image.new("L", image.size, 0)
+        mask.paste(255, (2, 2, 5, 5))
+        return mask, 0.71
+
+    monkeypatch.setattr(module, "_segment_mask", fake_segment_mask)
+
+    result = manager.run_action(
+        "object-selector",
+        PluginActionRunRequest(
+            image=_solid_data_url((8, 8), (10, 20, 30, 255)),
+            target={
+                "kind": "canvas",
+                "bounds": {"x": 0, "y": 0, "width": 8, "height": 8},
+                "scale": 1,
+                "point": {"x": 3, "y": 4},
+                "visible_mask": _mask_data_url((8, 8), (0, 0, 8, 8)),
+            },
+        ),
+    )
+
+    assert records == {"box": None, "point": (3, 4)}
+    assert decode_data_url(result.mask).convert("L").getpixel((3, 3)) == 255
+    assert result.data["source"] == "click"
+
+
+def test_object_selector_sam_prompt_shape(tmp_path, monkeypatch) -> None:
+    _object_selector_manager(tmp_path)
+    module = sys.modules["expandiffusion_plugin_object_selector"]
+    torch = pytest.importorskip("torch")
+    captured = {}
+
+    class FakeImageProcessor:
+        def post_process_masks(self, pred_masks, _original_sizes, _reshaped_input_sizes):
+            return [pred_masks[0]]
+
+    class FakeProcessor:
+        image_processor = FakeImageProcessor()
+
+        def __call__(self, _image, **kwargs):
+            captured.update(kwargs)
+            return {
+                "original_sizes": torch.tensor([[8, 8]]),
+                "reshaped_input_sizes": torch.tensor([[8, 8]]),
+            }
+
+    class FakeOutputs:
+        pred_masks = torch.ones((1, 1, 1, 8, 8), dtype=torch.bool)
+        iou_scores = torch.tensor([[[0.83]]])
+
+    class FakeModel:
+        def __call__(self, **_inputs):
+            return FakeOutputs()
+
+    monkeypatch.setattr(module, "_load_sam", lambda: (FakeProcessor(), FakeModel()))
+
+    mask, confidence = module._segment_mask(
+        Image.new("RGB", (8, 8), (10, 20, 30)),
+        (1, 2, 6, 7),
+        (3, 4),
+    )
+
+    assert captured["input_boxes"] == [[[1, 2, 6, 7]]]
+    assert captured["input_points"] == [[[[3, 4]]]]
+    assert captured["input_labels"] == [[[1]]]
+    assert mask.getbbox() == (0, 0, 8, 8)
+    assert confidence == pytest.approx(0.83)
+
+
+def test_object_selector_reports_missing_prompt_detection(tmp_path, monkeypatch) -> None:
+    manager = _object_selector_manager(tmp_path)
+    module = sys.modules["expandiffusion_plugin_object_selector"]
+    monkeypatch.setattr(module, "_detect_prompt_boxes", lambda _image, _prompt: [])
+
+    with pytest.raises(AppError, match="did not detect"):
+        manager.run_action(
+            "object-selector",
+            PluginActionRunRequest(
+                image=_solid_data_url((8, 8), (10, 20, 30, 255)),
+                controls={"object_selector_prompt": "missing object"},
+                target={
+                    "kind": "canvas",
+                    "bounds": {"x": 0, "y": 0, "width": 8, "height": 8},
+                    "scale": 1,
+                    "visible_mask": _mask_data_url((8, 8), (0, 0, 8, 8)),
+                },
+            ),
+        )
+
+
+def _object_selector_manager(tmp_path) -> PluginManager:
+    registry = AdapterRegistry()
+    postprocessors = GenerationPostprocessorRegistry()
+    actions = PluginActionRegistry()
+    tools = PluginToolRegistry()
+    persistence = PersistenceStore(tmp_path / "app_state.json")
+    manager = PluginManager(
+        registry,
+        postprocessors,
+        persistence,
+        constants.DEFAULT_PLUGIN_DIR,
+        actions,
+        tools,
+    )
+    manager.load_all()
+    return manager
 
 
 def test_included_sdxl_ip_visual_refine_plugin_loads() -> None:

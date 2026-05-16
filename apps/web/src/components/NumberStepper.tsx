@@ -1,4 +1,5 @@
 import { Minus, Plus } from 'lucide-react'
+import { useI18n } from '../i18n/useI18n'
 
 interface NumberStepperProps {
   label: string
@@ -19,6 +20,7 @@ export function NumberStepper({
   disabled = false,
   onChange,
 }: NumberStepperProps) {
+  const { t } = useI18n()
   const canDecrease = !disabled && value > min
   const canIncrease = !disabled && value < max
 
@@ -30,7 +32,7 @@ export function NumberStepper({
           type="button"
           className="stepper-button"
           disabled={!canDecrease}
-          aria-label={`Decrease ${label}`}
+          aria-label={t('common.decreaseValue', { label })}
           onClick={() => onChange(clampNumber(roundForStep(value - step, step), min, max))}
         >
           <Minus size={13} />
@@ -50,7 +52,7 @@ export function NumberStepper({
           type="button"
           className="stepper-button"
           disabled={!canIncrease}
-          aria-label={`Increase ${label}`}
+          aria-label={t('common.increaseValue', { label })}
           onClick={() => onChange(clampNumber(roundForStep(value + step, step), min, max))}
         >
           <Plus size={13} />

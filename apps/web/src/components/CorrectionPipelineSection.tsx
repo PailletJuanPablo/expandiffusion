@@ -1,6 +1,7 @@
 import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Plus, X } from 'lucide-react'
 import { useState } from 'react'
 import type { ControlSchema, GenerationParameters, PostprocessorInfo } from '../domain/types'
+import { useI18n } from '../i18n/useI18n'
 import {
   activeCorrectionItems,
   appendCorrection,
@@ -31,6 +32,7 @@ export function CorrectionPipelineSection({
   parameters,
   onParameterChange,
 }: CorrectionPipelineSectionProps) {
+  const { t } = useI18n()
   const [addOpen, setAddOpen] = useState(false)
   const corrections = correctionPostprocessors(postprocessors)
   const activeItems = activeCorrectionItems(parameters.correction_pipeline, corrections)
@@ -40,7 +42,7 @@ export function CorrectionPipelineSection({
   if (corrections.length === 0 && activeItems.length === 0) {
     return (
       <section className="panel-section panel-section-compact">
-        <div className="persistence-empty">No correction plugins loaded.</div>
+        <div className="persistence-empty">{t('corrections.noneLoaded')}</div>
       </section>
     )
   }
@@ -64,8 +66,8 @@ export function CorrectionPipelineSection({
                     type="button"
                     variant="ghost"
                     size="smallIcon"
-                    title="Move correction up"
-                    aria-label="Move correction up"
+                    title={t('corrections.moveUp')}
+                    aria-label={t('corrections.moveUp')}
                     disabled={index === 0}
                     onClick={() =>
                       onParameterChange(
@@ -80,8 +82,8 @@ export function CorrectionPipelineSection({
                     type="button"
                     variant="ghost"
                     size="smallIcon"
-                    title="Move correction down"
-                    aria-label="Move correction down"
+                    title={t('corrections.moveDown')}
+                    aria-label={t('corrections.moveDown')}
                     disabled={index === activeItems.length - 1}
                     onClick={() =>
                       onParameterChange(
@@ -96,8 +98,8 @@ export function CorrectionPipelineSection({
                     type="button"
                     variant="ghost"
                     size="smallIcon"
-                    title="Remove correction"
-                    aria-label="Remove correction"
+                    title={t('corrections.remove')}
+                    aria-label={t('corrections.remove')}
                     onClick={() =>
                       onParameterChange(
                         'correction_pipeline',
@@ -130,7 +132,7 @@ export function CorrectionPipelineSection({
           >
             <span className="generation-section-title">
               <Plus size={16} />
-              <span>Add correction</span>
+              <span>{t('corrections.addCorrection')}</span>
             </span>
             <span className="generation-section-meta">
               <span>{availableItems.length}</span>
@@ -150,8 +152,8 @@ export function CorrectionPipelineSection({
                     variant="secondary"
                     size="smallIcon"
                     className="correction-add-button"
-                    title={`Add ${item.label}`}
-                    aria-label={`Add ${item.label}`}
+                    title={t('corrections.addNamed', { label: item.label })}
+                    aria-label={t('corrections.addNamed', { label: item.label })}
                     onClick={() =>
                       onParameterChange(
                         'correction_pipeline',

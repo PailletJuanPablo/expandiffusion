@@ -19,6 +19,7 @@ import {
   controlsForSection,
   isGenerationControlDisabled,
 } from '../lib/controlSchemas'
+import { useI18n } from '../i18n/useI18n'
 import { SchemaControl } from './SchemaControl'
 
 interface GenerationControlsProps {
@@ -52,6 +53,7 @@ export function GenerationControls({
   onLoraTextChange,
   onTextualInversionTextChange,
 }: GenerationControlsProps) {
+  const { t } = useI18n()
   const [openSections, setOpenSections] = useState({
     generation: true,
     advanced: false,
@@ -77,7 +79,7 @@ export function GenerationControls({
   return (
     <div className="generation-panel-stack">
       <CollapsibleSection
-        title="Generation"
+        title={t('generationControls.generation')}
         icon={WandSparkles}
         count={basicControls.length}
         open={openSections.generation}
@@ -91,7 +93,7 @@ export function GenerationControls({
       </CollapsibleSection>
 
       <CollapsibleSection
-        title="Advanced"
+        title={t('generationControls.advanced')}
         icon={SlidersHorizontal}
         count={advancedControls.length}
         open={openSections.advanced}
@@ -106,7 +108,7 @@ export function GenerationControls({
 
       {extensionControls.length > 0 ? (
         <CollapsibleSection
-          title="Personalization"
+          title={t('generationControls.personalization')}
           icon={Frame}
           count={extensionControls.length}
           open={openSections.personalization}
@@ -190,9 +192,14 @@ function SchemaControlList({
           onChange={onChange}
         />
       ))}
-      {controls.length === 0 ? <div className="empty-state">No controls in this group.</div> : null}
+      {controls.length === 0 ? <EmptyControlGroup /> : null}
     </div>
   )
+}
+
+function EmptyControlGroup() {
+  const { t } = useI18n()
+  return <div className="empty-state">{t('generationControls.noControls')}</div>
 }
 
 function extensionValue(

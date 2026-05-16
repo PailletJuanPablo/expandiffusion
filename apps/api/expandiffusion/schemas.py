@@ -113,6 +113,7 @@ class PluginActionResult(BaseModel):
     action_id: str
     text: str | None = None
     image: str | None = None
+    mask: str | None = None
     data: dict[str, Any] = Field(default_factory=dict)
 
 

@@ -1,6 +1,7 @@
 import * as DialogPrimitive from '@radix-ui/react-dialog'
 import { X } from 'lucide-react'
 import { forwardRef, type ComponentPropsWithoutRef, type ElementRef } from 'react'
+import { useI18n } from '../../i18n/useI18n'
 import { cn } from '../../lib/utils'
 
 export function Sheet(props: ComponentPropsWithoutRef<typeof DialogPrimitive.Root>) {
@@ -51,17 +52,20 @@ SheetOverlay.displayName = DialogPrimitive.Overlay.displayName
 export const SheetContent = forwardRef<
   ElementRef<typeof DialogPrimitive.Content>,
   ComponentPropsWithoutRef<typeof DialogPrimitive.Content>
->(({ className, children, ...props }, ref) => (
-  <SheetPortal>
-    <SheetOverlay />
-    <DialogPrimitive.Content ref={ref} className={cn('ui-sheet-content', className)} {...props}>
-      {children}
-      <DialogPrimitive.Close className="ui-sheet-close">
-        <X size={16} />
-        <span className="sr-only">Close</span>
-      </DialogPrimitive.Close>
-    </DialogPrimitive.Content>
-  </SheetPortal>
-))
+>(({ className, children, ...props }, ref) => {
+  const { t } = useI18n()
+  return (
+    <SheetPortal>
+      <SheetOverlay />
+      <DialogPrimitive.Content ref={ref} className={cn('ui-sheet-content', className)} {...props}>
+        {children}
+        <DialogPrimitive.Close className="ui-sheet-close">
+          <X size={16} />
+          <span className="sr-only">{t('common.close')}</span>
+        </DialogPrimitive.Close>
+      </DialogPrimitive.Content>
+    </SheetPortal>
+  )
+})
 
 SheetContent.displayName = DialogPrimitive.Content.displayName

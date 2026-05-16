@@ -30,12 +30,14 @@ import { parseLoras, parseTextualInversions } from '../lib/extensionParsers'
 import { isExpandImageAdapter } from '../lib/workspaceMode'
 import { useEditorStore } from '../store/editorStore'
 import type { AdapterInfo, GenerationParameters } from '../domain/types'
+import { useI18n } from '../i18n/useI18n'
+import { localizeJobMessage } from '../i18n/metadata'
+import type { TranslateFunction } from '../i18n/i18n'
 
 const CONTROL_GUIDE_DISABLED_ADAPTERS = new Set([
   'sdxl-fill-controlnet-union',
   'sdxl-fill-ip-refine',
 ])
-const FREE_OUTPAINT_MIN_OVERLAP_PERCENTAGE = 20
 
 interface UseOutpaintJobOptions {
   selectedAdapter: AdapterInfo | undefined
@@ -56,6 +58,7 @@ export function useOutpaintJob({
   textualInversionText,
   onPersistentStateRefresh,
 }: UseOutpaintJobOptions) {
+  const { t } = useI18n()
   const documentState = useEditorStore((state) => state.document)
   const selectedAdapterId = useEditorStore((state) => state.selectedAdapterId)
   const controlGuideEnabled = useEditorStore((state) => state.controlGuideEnabled)
@@ -199,7 +202,7 @@ export function useOutpaintJob({
                   },
                 )
                 setPendingResults(composed.images, composed.bounds, replaceDocument)
-                setGenerationNote(formatPostprocessorDiagnostics(result.metadata))
+                setGenerationNote(formatPostprocessorDiagnostics(result.metadata, t))
                 pushHistory({
                   id: result.job_id,
                   adapterId: selectedAdapterId,
@@ -267,7 +270,7 @@ function fixedExpandOutputScalePercent(parameters: GenerationParameters): number
   return 100
 }
 
-function parametersForGenerationMode(
+export function parametersForGenerationMode(
   parameters: ReturnType<typeof useEditorStore.getState>['parameters'],
   generationMode: ReturnType<typeof useEditorStore.getState>['generationMode'],
   expandImageGenerationActive: boolean,
@@ -295,16 +298,15 @@ function parametersForGenerationMode(
       outpaint_strategy: OUTPAINT_STRATEGY_LOCAL_CONTEXT,
       fill_mode: FILL_TRANSPARENT,
       result_mode: RESULT_MODE_FEATHER_KNOWN,
-      hf_space_overlap_percentage: Math.max(
-        parameters.hf_space_overlap_percentage,
-        FREE_OUTPAINT_MIN_OVERLAP_PERCENTAGE,
-      ),
     }
   }
   return parameters
 }
 
-function formatPostprocessorDiagnostics(metadata: Record<string, unknown>): string | null {
+function formatPostprocessorDiagnostics(
+  metadata: Record<string, unknown>,
+  t: TranslateFunction,
+): string | null {
   const diagnostics = metadata.postprocessors
   if (!Array.isArray(diagnostics) || diagnostics.length === 0) {
     return null
@@ -324,8 +326,13 @@ function formatPostprocessorDiagnostics(metadata: Record<string, unknown>): stri
   const detected = Number(report.detected_regions ?? 0)
   const refined = Number(report.refined_regions ?? 0)
   if (status === 'applied') {
-    return `${processorId} applied: ${refined}/${detected} regions refined.`
+    return t('generationNote.postprocessorApplied', { processorId, refined, detected })
   }
   const message = typeof report.message === 'string' ? report.message : null
-  return message ? `${processorId}: ${message}` : null
+  return message
+    ? t('generationNote.postprocessorMessage', {
+        processorId,
+        message: localizeJobMessage(message, t),
+      })
+    : null
 }

@@ -2,6 +2,7 @@ import { useMutation } from '@tanstack/react-query'
 import { X } from 'lucide-react'
 import { useMemo } from 'react'
 import { disablePlugin, enablePlugin } from '../lib/apiClient'
+import { useI18n } from '../i18n/useI18n'
 import { useStudioQueries } from '../hooks/useStudioQueries'
 import { useEditorStore } from '../store/editorStore'
 import { PluginManagerSection } from './PluginManagerSection'
@@ -18,6 +19,7 @@ interface PluginManagerDialogProps {
  * @returns Plugin manager dialog.
  */
 export function PluginManagerDialog({ onClose }: PluginManagerDialogProps) {
+  const { t } = useI18n()
   const {
     adaptersQuery,
     pluginsQuery,
@@ -61,21 +63,21 @@ export function PluginManagerDialog({ onClose }: PluginManagerDialogProps) {
       className="setup-overlay"
       role="dialog"
       aria-modal="true"
-      aria-label="Plugins"
+      aria-label={t('modelSetup.plugins')}
     >
       <div className="setup-dialog plugin-manager-dialog">
         <div className="setup-header">
           <div>
-            <h2>Plugins</h2>
-            <p>{enabledCount} / {pluginCount} enabled</p>
+            <h2>{t('modelSetup.plugins')}</h2>
+            <p>{enabledCount} / {pluginCount} {t('common.enabled')}</p>
           </div>
           <Button
             type="button"
             variant="ghost"
             size="smallIcon"
             className="setup-close-button"
-            aria-label="Close dialog"
-            title="Close"
+            aria-label={t('common.close')}
+            title={t('common.close')}
             onClick={onClose}
           >
             <X size={16} />

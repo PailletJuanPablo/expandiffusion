@@ -9,6 +9,7 @@ import {
   MODEL_SOURCE_SINGLE_FILE,
 } from '../constants/domain'
 import type { AdapterInfo, ModelLoadRequest, ModelSourceSchema } from '../domain/types'
+import type { TranslateFunction } from '../i18n/i18n'
 import { parseLoras, parseTextualInversions } from './extensionParsers'
 
 export interface ModelSourceValues {
@@ -37,11 +38,14 @@ interface BuildModelLoadRequestOptions {
  * @param adapter - Selected adapter metadata.
  * @returns Source schemas.
  */
-export function getModelSources(adapter: AdapterInfo | undefined): ModelSourceSchema[] {
+export function getModelSources(
+  adapter: AdapterInfo | undefined,
+  t?: TranslateFunction,
+): ModelSourceSchema[] {
   if (Array.isArray(adapter?.model_sources) && adapter.model_sources.length > 0) {
     return adapter.model_sources
   }
-  return fallbackModelSources(adapter?.default_model_id ?? null)
+  return fallbackModelSources(adapter?.default_model_id ?? null, t)
 }
 
 /**
@@ -54,8 +58,9 @@ export function getModelSources(adapter: AdapterInfo | undefined): ModelSourceSc
 export function getActiveModelSource(
   adapter: AdapterInfo | undefined,
   modelSource: string,
+  t?: TranslateFunction,
 ): ModelSourceSchema {
-  const sources = getModelSources(adapter)
+  const sources = getModelSources(adapter, t)
   return sources.find((source) => source.id === modelSource) ?? sources[0]
 }
 
@@ -146,32 +151,43 @@ export function getModelSourceValue(source: ModelSourceSchema, values: ModelSour
   return values.modelId || defaultValue
 }
 
-function fallbackModelSources(defaultModelId: string | null): ModelSourceSchema[] {
+function fallbackModelSources(
+  defaultModelId: string | null,
+  t?: TranslateFunction,
+): ModelSourceSchema[] {
   return [
     {
       id: MODEL_SOURCE_HUB,
-      label: 'Hugging Face model id',
+      label: t
+        ? t('metadata.modelSources.hub.label', {}, 'Hugging Face model id')
+        : 'Hugging Face model id',
       request_field: MODEL_SOURCE_FIELD_MODEL_ID,
       placeholder: null,
       default_value: defaultModelId,
     },
     {
       id: MODEL_SOURCE_LOCAL_FOLDER,
-      label: 'Local Diffusers folder',
+      label: t
+        ? t('metadata.modelSources.local_folder.label', {}, 'Local Diffusers folder')
+        : 'Local Diffusers folder',
       request_field: MODEL_SOURCE_FIELD_LOCAL_PATH,
       placeholder: 'E:\\models\\stable-diffusion-inpaint',
       default_value: null,
     },
     {
       id: MODEL_SOURCE_SINGLE_FILE,
-      label: 'Local checkpoint file',
+      label: t
+        ? t('metadata.modelSources.single_file.label', {}, 'Local checkpoint file')
+        : 'Local checkpoint file',
       request_field: MODEL_SOURCE_FIELD_SINGLE_FILE_PATH,
       placeholder: 'E:\\models\\model.safetensors',
       default_value: null,
     },
     {
       id: MODEL_SOURCE_DIRECT_URL,
-      label: 'Checkpoint URL',
+      label: t
+        ? t('metadata.modelSources.direct_url.label', {}, 'Checkpoint URL')
+        : 'Checkpoint URL',
       request_field: MODEL_SOURCE_FIELD_MODEL_URL,
       placeholder: 'https://civitai.com/models/...?... or https://.../model.safetensors',
       default_value: null,

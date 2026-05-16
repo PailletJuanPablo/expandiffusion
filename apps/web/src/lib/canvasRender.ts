@@ -53,6 +53,7 @@ const MAX_IMPORT_CANVAS_SIZE = 4096
 const MIN_IMPORT_IMAGE_EDGE = 64
 const MAX_INPAINT_INPUT_SIZE = 1024
 const INPAINT_MASK_CONTEXT_PADDING = 256
+const MAX_PLUGIN_CANVAS_TARGET_SIZE = 1024
 const OUTPAINT_CONTEXT_SIZE = 512
 const OUTPAINT_DEFAULT_MAX_WIDTH = 1536
 const OUTPAINT_DEFAULT_MAX_HEIGHT = 1024
@@ -62,6 +63,8 @@ const HF_SPACE_FILL_SIZE_MULTIPLE = 8
 const TRANSPARENT_ALPHA = 0
 const OUTPAINT_COMPOSITION_FEATHER_MAX = 32
 const CONTROL_GUIDE_FALLBACK_RGB: [number, number, number] = [127, 127, 127]
+const SEMANTIC_MASK_OVERLAY_RGB: [number, number, number] = [18, 184, 200]
+const SEMANTIC_MASK_OVERLAY_ALPHA = 112
 const CONTROL_GUIDE_NEIGHBORS: Array<[number, number]> = [
   [1, 0],
   [-1, 0],
@@ -261,21 +264,26 @@ export async function renderGenerationInputs(
       crossSize: options.outpaintCrossSize,
     })
   }
-  const renderPlan = mode === GENERATION_MODE_INPAINT
-    ? {
-        selection: visibleContentSelectionFromMask(documentState, fullCanvas),
-        renderWidth: 0,
-        renderHeight: 0,
-      }
-    : outpaintRenderPlanFromCanvas(
-        documentState.selection,
-        fullCanvas,
-        options.outpaintStrategy ?? OUTPAINT_STRATEGY_LOCAL_CONTEXT,
-        {
-          maxWidth: options.outpaintMaxWidth,
-          maxHeight: options.outpaintMaxHeight,
-        },
-      )
+  let inpaintMaskCanvas: HTMLCanvasElement | null = null
+  let renderPlan: { selection: SelectionRect; renderWidth: number; renderHeight: number }
+  if (mode === GENERATION_MODE_INPAINT) {
+    inpaintMaskCanvas = await renderInpaintMaskCanvas(documentState)
+    renderPlan = {
+      selection: visibleContentSelectionFromMask(documentState, fullCanvas, inpaintMaskCanvas),
+      renderWidth: 0,
+      renderHeight: 0,
+    }
+  } else {
+    renderPlan = outpaintRenderPlanFromCanvas(
+      documentState.selection,
+      fullCanvas,
+      options.outpaintStrategy ?? OUTPAINT_STRATEGY_LOCAL_CONTEXT,
+      {
+        maxWidth: options.outpaintMaxWidth,
+        maxHeight: options.outpaintMaxHeight,
+      },
+    )
+  }
   const selection = renderPlan.selection
   const renderWidth = renderPlan.renderWidth || selection.width
   const renderHeight = renderPlan.renderHeight || selection.height
@@ -291,8 +299,10 @@ export async function renderGenerationInputs(
   maskCanvas.height = renderHeight
   const maskContext = requireCanvasContext(maskCanvas)
   if (mode === GENERATION_MODE_INPAINT) {
-    const fullMask = renderInpaintMaskCanvas(documentState)
-    maskContext.drawImage(fullMask, -selection.x, -selection.y)
+    if (!inpaintMaskCanvas) {
+      throw new AppError('INPAINT_MASK_REQUIRED', 'Paint an inpaint mask before generating.')
+    }
+    maskContext.drawImage(inpaintMaskCanvas, -selection.x, -selection.y)
   } else {
     const imageData = imageContext.getImageData(0, 0, renderWidth, renderHeight)
     if (!imageDataHasVisiblePixels(imageData)) {
@@ -348,6 +358,9 @@ export async function renderPluginActionInput(
   documentState: EditorDocument,
   target: CanvasSelectionTarget,
 ): Promise<{ image: string; target: Record<string, unknown> }> {
+  if (target.kind === 'canvas') {
+    return renderCanvasActionInput(documentState, target)
+  }
   if (target.kind === 'raster') {
     return renderRasterActionInput(documentState)
   }
@@ -355,6 +368,62 @@ export async function renderPluginActionInput(
     return renderReferenceActionInput(documentState, target.id)
   }
   return renderFrameActionInput(documentState)
+}
+
+export async function eraseSemanticMaskFromDocument(
+  documentState: EditorDocument,
+  maskDataUrl: string,
+): Promise<string> {
+  const canvas = await renderDocumentCanvas(documentState)
+  const maskCanvas = await renderMaskAlphaCanvas(
+    maskDataUrl,
+    documentState.width,
+    documentState.height,
+  )
+  const context = requireCanvasContext(canvas)
+  context.save()
+  context.globalCompositeOperation = 'destination-out'
+  context.drawImage(maskCanvas, 0, 0)
+  context.restore()
+  return canvas.toDataURL('image/png')
+}
+
+export async function renderMaskOverlayDataUrl(maskDataUrl: string): Promise<string> {
+  const mask = await loadImageElement(maskDataUrl)
+  const canvas = await renderMaskAlphaCanvas(maskDataUrl, mask.naturalWidth, mask.naturalHeight)
+  const context = requireCanvasContext(canvas)
+  const imageData = context.getImageData(0, 0, canvas.width, canvas.height)
+  for (let index = 0; index < imageData.data.length; index += 4) {
+    const alpha = imageData.data[index + 3]
+    imageData.data[index] = SEMANTIC_MASK_OVERLAY_RGB[0]
+    imageData.data[index + 1] = SEMANTIC_MASK_OVERLAY_RGB[1]
+    imageData.data[index + 2] = SEMANTIC_MASK_OVERLAY_RGB[2]
+    imageData.data[index + 3] = Math.round((alpha / 255) * SEMANTIC_MASK_OVERLAY_ALPHA)
+  }
+  context.putImageData(imageData, 0, 0)
+  return canvas.toDataURL('image/png')
+}
+
+export async function renderPluginMaskToDocumentMask(
+  documentState: EditorDocument,
+  maskDataUrl: string,
+  target: Record<string, unknown>,
+): Promise<string> {
+  if (target.kind !== 'canvas') {
+    return maskDataUrl
+  }
+  const bounds = pluginCanvasTargetBounds(target)
+  if (!bounds) {
+    return maskDataUrl
+  }
+  const mask = await loadImageElement(maskDataUrl)
+  const canvas = document.createElement('canvas')
+  canvas.width = documentState.width
+  canvas.height = documentState.height
+  const context = requireCanvasContext(canvas)
+  context.clearRect(0, 0, canvas.width, canvas.height)
+  context.drawImage(mask, bounds.x, bounds.y, bounds.width, bounds.height)
+  return canvas.toDataURL('image/png')
 }
 
 /**
@@ -617,6 +686,25 @@ export async function eraseRasterStroke(
   return canvas.toDataURL('image/png')
 }
 
+export async function eraseRasterSelection(
+  documentState: EditorDocument,
+  selection: SelectionRect,
+): Promise<string> {
+  const canvas = await renderDocumentCanvas(documentState)
+  const context = requireCanvasContext(canvas)
+  const eraseBounds = sanitizeBounds(selection)
+  context.save()
+  context.globalCompositeOperation = 'destination-out'
+  context.fillRect(
+    eraseBounds.x,
+    eraseBounds.y,
+    eraseBounds.width,
+    eraseBounds.height,
+  )
+  context.restore()
+  return canvas.toDataURL('image/png')
+}
+
 function drawHardEraserStroke(
   context: CanvasRenderingContext2D,
   points: Point[],
@@ -760,6 +848,57 @@ async function renderFrameActionInput(
   }
 }
 
+async function renderCanvasActionInput(
+  documentState: EditorDocument,
+  target: Extract<CanvasSelectionTarget, { kind: 'canvas' }>,
+): Promise<{ image: string; target: Record<string, unknown> }> {
+  const fullCanvas = await renderDocumentCanvas(documentState)
+  const fullContext = requireCanvasContext(fullCanvas)
+  const fullImage = fullContext.getImageData(0, 0, fullCanvas.width, fullCanvas.height)
+  const visibleBounds = findVisibleAlphaBounds(fullImage.data, fullCanvas.width, fullCanvas.height)
+  if (!visibleBounds) {
+    throw new AppError('PLUGIN_ACTION_IMAGE_REQUIRED', 'Select visible image content first.')
+  }
+  const scale = Math.min(
+    1,
+    MAX_PLUGIN_CANVAS_TARGET_SIZE / Math.max(visibleBounds.width, visibleBounds.height),
+  )
+  const renderWidth = Math.max(1, Math.round(visibleBounds.width * scale))
+  const renderHeight = Math.max(1, Math.round(visibleBounds.height * scale))
+  const canvas = document.createElement('canvas')
+  canvas.width = renderWidth
+  canvas.height = renderHeight
+  const context = requireCanvasContext(canvas)
+  context.clearRect(0, 0, renderWidth, renderHeight)
+  context.drawImage(
+    fullCanvas,
+    visibleBounds.x,
+    visibleBounds.y,
+    visibleBounds.width,
+    visibleBounds.height,
+    0,
+    0,
+    renderWidth,
+    renderHeight,
+  )
+  requireVisiblePixels(canvas)
+  return {
+    image: canvas.toDataURL('image/png'),
+    target: {
+      kind: 'canvas',
+      bounds: visibleBounds,
+      scale,
+      point: target.point
+        ? {
+            x: (target.point.x - visibleBounds.x) * scale,
+            y: (target.point.y - visibleBounds.y) * scale,
+          }
+        : undefined,
+      visible_mask: renderVisibleMaskDataUrl(canvas),
+    },
+  }
+}
+
 async function renderRasterActionInput(
   documentState: EditorDocument,
 ): Promise<{ image: string; target: Record<string, unknown> }> {
@@ -822,6 +961,76 @@ function renderLayerImage(
       },
     },
   }
+}
+
+async function renderMaskAlphaCanvas(
+  maskDataUrl: string,
+  width: number,
+  height: number,
+): Promise<HTMLCanvasElement> {
+  const mask = await loadImageElement(maskDataUrl)
+  const canvas = document.createElement('canvas')
+  canvas.width = width
+  canvas.height = height
+  const context = requireCanvasContext(canvas)
+  context.clearRect(0, 0, width, height)
+  context.drawImage(mask, 0, 0, width, height)
+  const imageData = context.getImageData(0, 0, width, height)
+  for (let index = 0; index < imageData.data.length; index += 4) {
+    const sourceAlpha = imageData.data[index + 3] / 255
+    const maskAlpha = Math.max(
+      imageData.data[index],
+      imageData.data[index + 1],
+      imageData.data[index + 2],
+    )
+    imageData.data[index] = 0
+    imageData.data[index + 1] = 0
+    imageData.data[index + 2] = 0
+    imageData.data[index + 3] = Math.round(maskAlpha * sourceAlpha)
+  }
+  context.putImageData(imageData, 0, 0)
+  return canvas
+}
+
+function pluginCanvasTargetBounds(target: Record<string, unknown>): DocumentBounds | null {
+  const bounds = target.bounds
+  if (!bounds || typeof bounds !== 'object') {
+    return null
+  }
+  const rawBounds = bounds as Record<string, unknown>
+  const x = finiteNumber(rawBounds.x)
+  const y = finiteNumber(rawBounds.y)
+  const width = finiteNumber(rawBounds.width)
+  const height = finiteNumber(rawBounds.height)
+  if (x === null || y === null || width === null || height === null) {
+    return null
+  }
+  return { x, y, width, height }
+}
+
+function finiteNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+function renderVisibleMaskDataUrl(source: HTMLCanvasElement): string {
+  const sourceContext = requireCanvasContext(source)
+  const sourceImage = sourceContext.getImageData(0, 0, source.width, source.height)
+  const maskCanvas = document.createElement('canvas')
+  maskCanvas.width = source.width
+  maskCanvas.height = source.height
+  const maskContext = requireCanvasContext(maskCanvas)
+  const maskImage = maskContext.createImageData(source.width, source.height)
+  for (let index = 0; index < sourceImage.data.length; index += 4) {
+    if (sourceImage.data[index + 3] <= TRANSPARENT_ALPHA) {
+      continue
+    }
+    maskImage.data[index] = 255
+    maskImage.data[index + 1] = 255
+    maskImage.data[index + 2] = 255
+    maskImage.data[index + 3] = 255
+  }
+  maskContext.putImageData(maskImage, 0, 0)
+  return maskCanvas.toDataURL('image/png')
 }
 
 function requireVisiblePixels(canvas: HTMLCanvasElement): void {
@@ -2154,13 +2363,17 @@ export function clearMaskedControlGuidePixels(
   return imageData
 }
 
-function renderInpaintMaskCanvas(documentState: EditorDocument): HTMLCanvasElement {
+async function renderInpaintMaskCanvas(documentState: EditorDocument): Promise<HTMLCanvasElement> {
   const canvas = document.createElement('canvas')
   canvas.width = documentState.width
   canvas.height = documentState.height
   const context = requireCanvasContext(canvas)
   context.fillStyle = BLACK_PIXEL
   context.fillRect(0, 0, documentState.width, documentState.height)
+  if (documentState.semanticMaskDataUrl) {
+    const semanticMask = await loadImageElement(documentState.semanticMaskDataUrl)
+    context.drawImage(semanticMask, 0, 0, documentState.width, documentState.height)
+  }
   context.lineCap = 'round'
   context.lineJoin = 'round'
   for (const stroke of documentState.maskStrokes) {
@@ -2279,8 +2492,9 @@ function controlStrokeAlpha(strength: number | undefined): number {
 function visibleContentSelectionFromMask(
   documentState: EditorDocument,
   fullCanvas: HTMLCanvasElement,
+  maskCanvas: HTMLCanvasElement,
 ): SelectionRect {
-  const maskBounds = maskStrokeBounds(documentState)
+  const maskBounds = combinedMaskBounds(documentState, maskCanvas)
   if (!maskBounds) {
     throw new AppError('INPAINT_MASK_REQUIRED', 'Paint an inpaint mask before generating.')
   }
@@ -2303,6 +2517,52 @@ function visibleContentSelectionFromMask(
     throw new AppError('INPAINT_MASK_REQUIRED', 'Paint an inpaint mask over the visible image.')
   }
   return inpaintSelectionFromBrushCenter(visibleBounds, maskBounds)
+}
+
+function combinedMaskBounds(
+  documentState: EditorDocument,
+  maskCanvas: HTMLCanvasElement,
+): DocumentBounds | null {
+  const strokeBounds = maskStrokeBounds(documentState)
+  const bitmapBounds = maskPaintBounds(maskCanvas)
+  if (strokeBounds && bitmapBounds) {
+    return unionBounds(strokeBounds, bitmapBounds)
+  }
+  return strokeBounds ?? bitmapBounds
+}
+
+function maskPaintBounds(maskCanvas: HTMLCanvasElement): DocumentBounds | null {
+  const context = requireCanvasContext(maskCanvas)
+  const imageData = context.getImageData(0, 0, maskCanvas.width, maskCanvas.height)
+  let minX = Number.POSITIVE_INFINITY
+  let minY = Number.POSITIVE_INFINITY
+  let maxX = Number.NEGATIVE_INFINITY
+  let maxY = Number.NEGATIVE_INFINITY
+  for (let y = 0; y < maskCanvas.height; y += 1) {
+    for (let x = 0; x < maskCanvas.width; x += 1) {
+      const index = (y * maskCanvas.width + x) * 4
+      if (
+        imageData.data[index] < 128 &&
+        imageData.data[index + 1] < 128 &&
+        imageData.data[index + 2] < 128
+      ) {
+        continue
+      }
+      minX = Math.min(minX, x)
+      minY = Math.min(minY, y)
+      maxX = Math.max(maxX, x + 1)
+      maxY = Math.max(maxY, y + 1)
+    }
+  }
+  if (!Number.isFinite(minX)) {
+    return null
+  }
+  return sanitizeBounds({
+    x: minX,
+    y: minY,
+    width: maxX - minX,
+    height: maxY - minY,
+  })
 }
 
 function boundsIntersect(first: DocumentBounds, second: DocumentBounds): boolean {

@@ -1,6 +1,8 @@
 import { ChevronDown, ChevronUp, Download, History, RotateCcw } from 'lucide-react'
 import { EXPORT_FILE_NAME } from '../constants/domain'
 import type { DocumentBounds } from '../domain/types'
+import { localizeAdapterLabel } from '../i18n/metadata'
+import { useI18n } from '../i18n/useI18n'
 import { renderDocumentDataUrl } from '../lib/canvasRender'
 import { ONBOARDING_TARGET_FILMSTRIP } from '../lib/onboardingTour'
 import { downloadDataUrl } from '../lib/projectArchive'
@@ -13,6 +15,7 @@ interface FilmstripProps {
 }
 
 export function Filmstrip({ collapsed, onCollapsedChange }: FilmstripProps) {
+  const { t } = useI18n()
   const pendingResults = useEditorStore((state) => state.pendingResults)
   const selectedResultIndex = useEditorStore((state) => state.selectedResultIndex)
   const selectResult = useEditorStore((state) => state.selectResult)
@@ -38,7 +41,7 @@ export function Filmstrip({ collapsed, onCollapsedChange }: FilmstripProps) {
               renderDocumentDataUrl(documentState)
                 .then((dataUrl) => downloadDataUrl(dataUrl, EXPORT_FILE_NAME))
                 .catch((error) =>
-                  setErrorMessage(error instanceof Error ? error.message : 'PNG export failed.'),
+                  setErrorMessage(error instanceof Error ? error.message : t('filmstrip.exportFailed')),
                 )
             }
           }}
@@ -51,24 +54,24 @@ export function Filmstrip({ collapsed, onCollapsedChange }: FilmstripProps) {
           variant="secondary"
           size="compact"
           className="filmstrip-toggle"
-          aria-label={collapsed ? 'Expand previews' : 'Collapse previews'}
+          aria-label={collapsed ? t('filmstrip.expandPreviews') : t('filmstrip.collapsePreviews')}
           onClick={() => onCollapsedChange(!collapsed)}
         >
           {collapsed ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-          {collapsed ? 'Show' : 'Hide'}
+          {collapsed ? t('common.show') : t('common.hide')}
         </Button>
       </div>
       {collapsed ? (
         <div className="filmstrip-summary">
-          <span>Previews</span>
+          <span>{t('filmstrip.previews')}</span>
           <strong>{visibleCount}</strong>
         </div>
       ) : null}
       {!collapsed ? (
       <div className="filmstrip-content">
         {pendingResults.length > 0 ? (
-          <div className="result-strip" aria-label="Generation previews">
-            <span className="strip-label">Previews</span>
+          <div className="result-strip" aria-label={t('filmstrip.generationPreviews')}>
+            <span className="strip-label">{t('filmstrip.previews')}</span>
             {pendingResults.map((result, index) => (
               <button
                 type="button"
@@ -76,16 +79,16 @@ export function Filmstrip({ collapsed, onCollapsedChange }: FilmstripProps) {
                 className={index === selectedResultIndex ? 'thumb-button thumb-active' : 'thumb-button'}
                 onClick={() => selectResult(index)}
               >
-                <img src={result} alt={`Result ${index + 1}`} />
+                <img src={result} alt={t('filmstrip.resultAlt', { index: index + 1 })} />
               </button>
             ))}
           </div>
         ) : null}
         {pendingResults.length === 0 && history.length > 0 ? (
-          <div className="history-strip" aria-label="Generation history">
+          <div className="history-strip" aria-label={t('filmstrip.generationHistory')}>
             <div className="strip-label">
               <History size={14} />
-              History
+              {t('common.history')}
             </div>
             {history.slice(0, 8).map((item) => (
               <HistoryThumb
@@ -97,7 +100,7 @@ export function Filmstrip({ collapsed, onCollapsedChange }: FilmstripProps) {
           </div>
         ) : null}
         {pendingResults.length === 0 && history.length === 0 ? (
-          <div className="empty-strip">Generated previews and accepted steps will appear here.</div>
+          <div className="empty-strip">{t('filmstrip.empty')}</div>
         ) : null}
       </div>
       ) : null}
@@ -119,6 +122,7 @@ function HistoryThumb({
   }
   onOpen: () => void
 }) {
+  const { t } = useI18n()
   const image = item.acceptedImage ?? item.images[0]
   if (!image) {
     return null
@@ -128,12 +132,12 @@ function HistoryThumb({
       type="button"
       className="history-card"
       onClick={onOpen}
-      title="Review this generation"
+      title={t('filmstrip.reviewGeneration')}
     >
-      <img src={image} alt={item.prompt || 'Generation'} />
+      <img src={image} alt={item.prompt || t('filmstrip.generationAlt')} />
       <span className="history-card-body">
-        <strong>{item.prompt || 'No prompt'}</strong>
-        <span>{item.adapterId} / {formatHistoryTime(item.createdAt)}</span>
+        <strong>{item.prompt || t('common.noPrompt')}</strong>
+        <span>{localizeAdapterLabel(item.adapterId, t)} / {formatHistoryTime(item.createdAt)}</span>
       </span>
       <span className="history-card-action" aria-hidden="true">
         <RotateCcw size={14} />

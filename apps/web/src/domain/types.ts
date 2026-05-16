@@ -1,6 +1,7 @@
 import type {
   ControlGuideMaskMode,
   EditorTool,
+  EraserMode,
   GenerationMode,
   MaskStrokeMode,
   OutpaintDirection,
@@ -70,6 +71,7 @@ export type CanvasSelectionTarget =
   | { kind: 'none' }
   | { kind: 'frame' }
   | { kind: 'raster' }
+  | { kind: 'canvas'; point?: Point }
   | { kind: 'reference'; id: string }
 
 export interface EditorDocument {
@@ -79,6 +81,7 @@ export interface EditorDocument {
   rasterDataUrl: string | null
   rasterBounds: DocumentBounds | null
   selection: SelectionRect
+  semanticMaskDataUrl: string | null
   maskStrokes: MaskStroke[]
   controlStrokes: ControlStroke[]
   references: ReferenceImageLayer[]
@@ -220,6 +223,7 @@ export interface PluginActionResult {
   action_id: string
   text: string | null
   image: string | null
+  mask: string | null
   data: Record<string, unknown>
 }
 
@@ -451,6 +455,7 @@ export interface EditorStoreState {
   canvasSelectionTarget: CanvasSelectionTarget
   brushSize: number
   eraserHardness: number
+  eraserMode: EraserMode
   controlGuideEnabled: boolean
   controlGuideColor: string
   controlGuideStrength: number

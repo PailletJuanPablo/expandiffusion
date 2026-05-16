@@ -15,6 +15,8 @@ import {
 import { Check, ChevronLeft, ChevronRight, X } from "lucide-react";
 import {
   DEFAULT_CONTROL_GUIDE_STRENGTH,
+  ERASER_MODE_BRUSH,
+  ERASER_MODE_RECTANGLE,
   GENERATION_MODE_OUTPAINT,
   MAX_CONTROL_GUIDE_STRENGTH,
   MAX_ZOOM,
@@ -36,6 +38,7 @@ import {
   WORKSPACE_MODE_EXPAND_IMAGE,
   isPluginEditorTool,
   pluginToolIdFromEditorTool,
+  PLUGIN_TOOL_TARGET_CANVAS,
   PLUGIN_TOOL_TARGET_IMAGE,
 } from "../constants/domain";
 import type {
@@ -51,12 +54,16 @@ import type {
 import { useImageElement } from "../hooks/useImageElement";
 import { useStudioQueries } from "../hooks/useStudioQueries";
 import {
+  eraseRasterSelection,
   eraseRasterStroke,
   type HfSpaceFillExpansionPlan,
   planHfSpaceFillExpansion,
+  renderMaskOverlayDataUrl,
 } from "../lib/canvasRender";
 import { planCenteredDocumentViewport } from "../lib/canvasViewport";
 import { ONBOARDING_TARGET_CANVAS } from "../lib/onboardingTour";
+import { useI18n } from "../i18n/useI18n";
+import { localizeJobMessage } from "../i18n/metadata";
 import { useEditorStore } from "../store/editorStore";
 import { CANVAS_THEME } from "../theme/canvasTheme";
 import { Button } from "./ui/button";
@@ -77,6 +84,8 @@ export function CanvasWorkspace() {
   const [isDrawing, setIsDrawing] = useState(false);
   const [erasePoints, setErasePoints] = useState<Point[]>([]);
   const [cursorPoint, setCursorPoint] = useState<Point | null>(null);
+  const [semanticMaskOverlayDataUrl, setSemanticMaskOverlayDataUrl] =
+    useState<string | null>(null);
   const [shiftPressed, setShiftPressed] = useState(false);
   const { pluginToolsQuery } = useStudioQueries();
 
@@ -96,6 +105,7 @@ export function CanvasWorkspace() {
     Boolean(documentState.rasterDataUrl);
   const viewport = useEditorStore((state) => state.viewport);
   const tool = useEditorStore((state) => state.tool);
+  const eraserMode = useEditorStore((state) => state.eraserMode);
   const workspaceMode = useEditorStore((state) => state.workspaceMode);
   const generationMode = useEditorStore((state) => state.generationMode);
   const parameters = useEditorStore((state) => state.parameters);
@@ -107,6 +117,14 @@ export function CanvasWorkspace() {
     outpaintStrategy === OUTPAINT_STRATEGY_DIRECTIONAL;
   const panModifierActive = shiftPressed;
   const panning = tool === TOOL_PAN || panModifierActive;
+  const brushEraseActive =
+    tool === TOOL_ERASE &&
+    eraserMode === ERASER_MODE_BRUSH &&
+    !panModifierActive;
+  const rectangleEraseActive =
+    tool === TOOL_ERASE &&
+    eraserMode === ERASER_MODE_RECTANGLE &&
+    !panModifierActive;
   const frameToolActive = tool === TOOL_OUTPAINT_FRAME && !panModifierActive;
   const selectToolActive = tool === TOOL_SELECT && !panModifierActive;
   const pluginToolActive = isPluginEditorTool(tool) && !panModifierActive;
@@ -116,7 +134,10 @@ export function CanvasWorkspace() {
   );
   const pluginImageToolActive =
     pluginToolActive && activePluginTool?.target === PLUGIN_TOOL_TARGET_IMAGE;
-  const pluginFrameToolActive = pluginToolActive && !pluginImageToolActive;
+  const pluginCanvasToolActive =
+    pluginToolActive && activePluginTool?.target === PLUGIN_TOOL_TARGET_CANVAS;
+  const pluginFrameToolActive =
+    pluginToolActive && !pluginImageToolActive && !pluginCanvasToolActive;
   const frameSelected = canvasSelectionTarget.kind === "frame";
   const frameVisible =
     pluginFrameToolActive ||
@@ -130,6 +151,8 @@ export function CanvasWorkspace() {
       !expandImageActive &&
       !directionalOutpaintActive &&
       (frameToolActive || (selectToolActive && frameSelected)));
+  const selectionTransformActive = frameSelectionActive || rectangleEraseActive;
+  const selectionRectVisible = frameVisible || rectangleEraseActive;
   const imageSelectionToolActive = selectToolActive || pluginImageToolActive;
   const rasterImage = useImageElement(documentState.rasterDataUrl);
   const pluginPreview = useEditorStore((state) => state.pluginPreview);
@@ -140,6 +163,9 @@ export function CanvasWorkspace() {
       ? pluginPreview
       : null;
   const pluginPreviewImage = useImageElement(activePluginPreview?.image ?? null);
+  const pluginCanvasPreviewImage =
+    activePluginPreview?.target.kind === "canvas" ? pluginPreviewImage : null;
+  const semanticMaskOverlayImage = useImageElement(semanticMaskOverlayDataUrl);
   const rasterDisplayImage =
     activePluginPreview?.target.kind === "raster" && pluginPreviewImage
       ? pluginPreviewImage
@@ -181,6 +207,7 @@ export function CanvasWorkspace() {
   const replaceRasterDataUrl = useEditorStore(
     (state) => state.replaceRasterDataUrl,
   );
+  const setEraserMode = useEditorStore((state) => state.setEraserMode);
   const updateRasterBounds = useEditorStore(
     (state) => state.updateRasterBounds,
   );
@@ -244,14 +271,43 @@ export function CanvasWorkspace() {
   useEffect(() => {
     const transformer = transformerRef.current;
     const selection = selectionRef.current;
-    if (!transformer || !selection || !frameSelectionActive) {
+    if (!transformer || !selection || !selectionTransformActive) {
       transformer?.nodes([]);
       transformer?.getLayer()?.batchDraw();
       return;
     }
     transformer.nodes([selection]);
     transformer.getLayer()?.batchDraw();
-  }, [frameSelectionActive, documentState.selection]);
+  }, [selectionTransformActive, documentState.selection]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!documentState.semanticMaskDataUrl) {
+      const resetTimer = window.setTimeout(() => {
+        if (!cancelled) {
+          setSemanticMaskOverlayDataUrl(null);
+        }
+      }, 0);
+      return () => {
+        cancelled = true;
+        window.clearTimeout(resetTimer);
+      };
+    }
+    renderMaskOverlayDataUrl(documentState.semanticMaskDataUrl)
+      .then((overlayDataUrl) => {
+        if (!cancelled) {
+          setSemanticMaskOverlayDataUrl(overlayDataUrl);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setSemanticMaskOverlayDataUrl(null);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [documentState.semanticMaskDataUrl]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -322,6 +378,11 @@ export function CanvasWorkspace() {
     if (panning) {
       return;
     }
+    if (pluginCanvasToolActive) {
+      const point = getDocumentPoint();
+      setCanvasSelectionTarget(point ? { kind: "canvas", point } : { kind: "canvas" });
+      return;
+    }
     if (pluginFrameToolActive && event.target === stageRef.current) {
       setCanvasSelectionTarget({ kind: "frame" });
       return;
@@ -351,7 +412,13 @@ export function CanvasWorkspace() {
       setIsDrawing(true);
       return;
     }
-    if (tool !== TOOL_ERASE) {
+    if (rectangleEraseActive) {
+      if (event.target === stageRef.current) {
+        setCanvasSelectionTarget({ kind: "none" });
+      }
+      return;
+    }
+    if (!brushEraseActive) {
       return;
     }
     const point = getDocumentPoint();
@@ -379,7 +446,7 @@ export function CanvasWorkspace() {
       appendMaskPoint(point);
       return;
     }
-    if (tool !== TOOL_ERASE) {
+    if (!brushEraseActive) {
       return;
     }
     setErasePoints((points) => [...points, point]);
@@ -391,7 +458,7 @@ export function CanvasWorkspace() {
   };
 
   const handlePointerUp = () => {
-    if (isDrawing && tool === TOOL_ERASE) {
+    if (isDrawing && tool === TOOL_ERASE && eraserMode === ERASER_MODE_BRUSH) {
       const points = erasePoints;
       setErasePoints([]);
       setIsDrawing(false);
@@ -411,6 +478,20 @@ export function CanvasWorkspace() {
       return;
     }
     setIsDrawing(false);
+  };
+
+  const applyRectangleErase = () => {
+    eraseRasterSelection(documentState, documentState.selection)
+      .then(replaceRasterDataUrl)
+      .catch((error) =>
+        setErrorMessage(
+          error instanceof Error ? error.message : "Erase failed.",
+        ),
+      );
+  };
+
+  const cancelRectangleErase = () => {
+    setEraserMode(ERASER_MODE_BRUSH);
   };
 
   const handleSelectionTransformEnd = () => {
@@ -458,6 +539,12 @@ export function CanvasWorkspace() {
           }
           onAccept={acceptSelectedResult}
           onCancel={rejectResults}
+        />
+      ) : null}
+      {rectangleEraseActive && !previewImage ? (
+        <RectangleEraseControls
+          onAccept={applyRectangleErase}
+          onCancel={cancelRectangleErase}
         />
       ) : null}
       <Stage
@@ -528,6 +615,39 @@ export function CanvasWorkspace() {
               listening={false}
             />
           ) : null}
+          {pluginCanvasPreviewImage ? (
+            <Image
+              image={pluginCanvasPreviewImage}
+              x={0}
+              y={0}
+              width={documentState.width}
+              height={documentState.height}
+              listening={false}
+            />
+          ) : null}
+          {semanticMaskOverlayImage ? (
+            <Image
+              image={semanticMaskOverlayImage}
+              x={0}
+              y={0}
+              width={documentState.width}
+              height={documentState.height}
+              listening={false}
+            />
+          ) : null}
+          {pluginCanvasToolActive &&
+          canvasSelectionTarget.kind === "canvas" &&
+          canvasSelectionTarget.point ? (
+            <Circle
+              x={canvasSelectionTarget.point.x}
+              y={canvasSelectionTarget.point.y}
+              radius={8 / viewport.zoom}
+              fill={CANVAS_THEME.inpaintMaskPreviewFill}
+              stroke={CANVAS_THEME.inpaintMaskPreviewStroke}
+              strokeWidth={2 / viewport.zoom}
+              listening={false}
+            />
+          ) : null}
           {tool === TOOL_INPAINT_MASK
             ? documentState.maskStrokes.map((stroke) => (
                 <MaskStrokeNode key={stroke.id} stroke={stroke} />
@@ -540,7 +660,7 @@ export function CanvasWorkspace() {
               active={controlGuideEnabled}
             />
           ))}
-          {tool === TOOL_ERASE && erasePoints.length > 0 ? (
+          {brushEraseActive && erasePoints.length > 0 ? (
             <Line
               points={erasePoints.flatMap((point) => [point.x, point.y])}
               stroke={CANVAS_THEME.eraserStroke}
@@ -551,7 +671,7 @@ export function CanvasWorkspace() {
               listening={false}
             />
           ) : null}
-          {tool === TOOL_ERASE && !panning && cursorPoint ? (
+          {brushEraseActive && !panning && cursorPoint ? (
             <>
               <Circle
                 x={cursorPoint.x}
@@ -619,20 +739,32 @@ export function CanvasWorkspace() {
           {jobRunning && currentJob ? (
             <JobProgressOverlay job={currentJob} selection={jobSelection} />
           ) : null}
-          {frameVisible ? (
+          {selectionRectVisible ? (
             <Rect
               ref={selectionRef}
               x={documentState.selection.x}
               y={documentState.selection.y}
               width={documentState.selection.width}
               height={documentState.selection.height}
-              stroke={CANVAS_THEME.selectionStroke}
+              stroke={
+                rectangleEraseActive
+                  ? CANVAS_THEME.eraserPreviewStroke
+                  : CANVAS_THEME.selectionStroke
+              }
               strokeWidth={2 / viewport.zoom}
               dash={[10 / viewport.zoom, 6 / viewport.zoom]}
-              fill={CANVAS_THEME.selectionFill}
-              listening={frameSelectionActive && !panning}
-              draggable={frameSelectionActive}
-              onMouseDown={() => {
+              fill={
+                rectangleEraseActive
+                  ? CANVAS_THEME.eraserPreviewFill
+                  : CANVAS_THEME.selectionFill
+              }
+              listening={selectionTransformActive && !panning}
+              draggable={selectionTransformActive}
+              onMouseDown={(event) => {
+                if (rectangleEraseActive) {
+                  event.cancelBubble = true;
+                  return;
+                }
                 setCanvasSelectionTarget({ kind: "frame" });
               }}
               onDragEnd={(event) =>
@@ -641,13 +773,21 @@ export function CanvasWorkspace() {
               onTransformEnd={handleSelectionTransformEnd}
             />
           ) : null}
-          {frameSelectionActive ? (
+          {selectionTransformActive ? (
             <Transformer
               ref={transformerRef}
               rotateEnabled={false}
               anchorSize={10 / viewport.zoom}
-              borderStroke={CANVAS_THEME.selectionStroke}
-              anchorStroke={CANVAS_THEME.selectionStroke}
+              borderStroke={
+                rectangleEraseActive
+                  ? CANVAS_THEME.eraserPreviewStroke
+                  : CANVAS_THEME.selectionStroke
+              }
+              anchorStroke={
+                rectangleEraseActive
+                  ? CANVAS_THEME.eraserPreviewStroke
+                  : CANVAS_THEME.selectionStroke
+              }
               anchorFill={CANVAS_THEME.transformAnchorFill}
             />
           ) : null}
@@ -1345,6 +1485,7 @@ function ResultControls({
   onAccept: () => void;
   onCancel: () => void;
 }) {
+  const { t } = useI18n();
   return (
     <div className="result-controls-overlay">
       <Button
@@ -1370,7 +1511,7 @@ function ResultControls({
       </Button>
       <Button type="button" variant="accept" size="compact" onClick={onAccept}>
         <Check size={16} />
-        Accept
+        {t("canvas.accept")}
       </Button>
       <Button
         type="button"
@@ -1379,7 +1520,37 @@ function ResultControls({
         onClick={onCancel}
       >
         <X size={16} />
-        Cancel
+        {t("canvas.cancel")}
+      </Button>
+    </div>
+  );
+}
+
+function RectangleEraseControls({
+  onAccept,
+  onCancel,
+}: {
+  onAccept: () => void;
+  onCancel: () => void;
+}) {
+  const { t } = useI18n();
+  return (
+    <div className="result-controls-overlay">
+      <span className="result-counter result-action-label">
+        {t("canvas.eraseArea")}
+      </span>
+      <Button type="button" variant="danger" size="compact" onClick={onAccept}>
+        <Check size={16} />
+        {t("canvas.eraseSelection")}
+      </Button>
+      <Button
+        type="button"
+        variant="secondary"
+        size="compact"
+        onClick={onCancel}
+      >
+        <X size={16} />
+        {t("canvas.cancel")}
       </Button>
     </div>
   );
@@ -1414,6 +1585,7 @@ function JobProgressOverlay({
   job: { progress: number; message: string };
   selection: { x: number; y: number; width: number; height: number };
 }) {
+  const { t } = useI18n();
   const progress = Math.round(job.progress * 100);
   return (
     <Group listening={false}>
@@ -1438,7 +1610,7 @@ function JobProgressOverlay({
         y={selection.y + Math.max(12, selection.height / 2 - 16)}
         width={Math.max(40, selection.width - 24)}
         align="center"
-        text={`${progress}%\n${job.message}`}
+        text={`${progress}%\n${localizeJobMessage(job.message, t)}`}
         fill={CANVAS_THEME.jobText}
         fontSize={Math.max(11, Math.min(16, selection.width / 14))}
         fontStyle="bold"
@@ -1566,5 +1738,5 @@ function targetsMatch(
   if (first.kind === "reference" && second.kind === "reference") {
     return first.id === second.id;
   }
-  return first.kind === "raster";
+  return first.kind === "raster" || first.kind === "canvas";
 }

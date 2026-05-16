@@ -126,7 +126,7 @@ describe('onboardingTour', () => {
     ).toBe(false)
   })
 
-  it('uses canvas and frame copy for the post-upload guidance', () => {
+  it('uses fixed expansion copy for the post-upload guidance', () => {
     const canvasStep = ONBOARDING_STEPS.find((step) => step.id === ONBOARDING_STEP_IMAGE_FOCUS)
     const frameStep = ONBOARDING_STEPS.find((step) => step.id === ONBOARDING_STEP_PREPARE_OUTPAINT)
 
@@ -134,6 +134,11 @@ describe('onboardingTour', () => {
       title: 'Now the image becomes editable space',
       body: 'The canvas is where generations are previewed and composed. Hold Shift and drag anytime to pan around without switching tools.',
     })
-    expect(frameStep?.body).toContain('overlap part of the original')
+    expect(frameStep).toMatchObject({
+      title: 'Use fixed expansion for the first generation',
+      primaryLabel: 'Use fixed expansion',
+    })
+    expect(frameStep?.body).toContain('Fixed expansion grows the whole image')
+    expect(frameStep?.body).not.toContain('cyan frame')
   })
 })

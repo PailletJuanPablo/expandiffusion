@@ -9,12 +9,13 @@ import type { ControlSchema } from '../domain/types'
 import { NumberStepper } from './NumberStepper'
 import { SelectControl } from './SelectControl'
 import {
-  PREPROCESSOR_DETAILS,
+  localizedPreprocessorDetails,
   type PreprocessorDetails,
   preprocessorDetailsFor,
 } from '../lib/preprocessorDetails'
 import { controlHelpFor, controlOptionDetailsFor } from '../lib/controlHelp'
 import { ONBOARDING_TARGET_PROMPT_INPUT } from '../lib/onboardingTour'
+import { useI18n } from '../i18n/useI18n'
 import { Input } from './ui/input'
 import { Textarea } from './ui/textarea'
 
@@ -39,8 +40,9 @@ export function SchemaControl({
   disabled = false,
   onChange,
 }: SchemaControlProps) {
-  const help = controlHelpFor(control.id)
-  const optionDetails = controlOptionDetailsFor(control.id)
+  const { t } = useI18n()
+  const help = controlHelpFor(control.id, t)
+  const optionDetails = controlOptionDetailsFor(control.id, t)
 
   if (control.kind === CONTROL_SELECT) {
     const selectedValue = stringValue(value, control.default_value)
@@ -52,12 +54,12 @@ export function SchemaControl({
             value={selectedValue}
             options={control.options}
             disabled={disabled}
-            optionDetails={PREPROCESSOR_DETAILS}
+            optionDetails={localizedPreprocessorDetails(t)}
             showSelectedDescription={false}
             onChange={(nextValue) => onChange(control.id, nextValue)}
           />
           <ControlHelpText description={help} />
-          <PreprocessorSummary details={preprocessorDetailsFor(selectedValue)} />
+          <PreprocessorSummary details={preprocessorDetailsFor(selectedValue, t)} />
         </div>
       )
     }
@@ -190,6 +192,7 @@ function PreprocessorSummary({
 }: {
   details: PreprocessorDetails | null
 }) {
+  const { t } = useI18n()
   if (!details) {
     return null
   }
@@ -203,11 +206,11 @@ function PreprocessorSummary({
       <p>{details.description}</p>
       <div className="preprocessor-summary-grid">
         <div>
-          <span>Best for</span>
+          <span>{t('schema.bestFor')}</span>
           <strong>{details.bestFor}</strong>
         </div>
         <div>
-          <span>Watch</span>
+          <span>{t('schema.watch')}</span>
           <strong>{details.caution}</strong>
         </div>
       </div>

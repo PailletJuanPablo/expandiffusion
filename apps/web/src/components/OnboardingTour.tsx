@@ -13,12 +13,12 @@ import {
   ONBOARDING_STEP_IMAGE_FOCUS,
   ONBOARDING_STEP_LOAD_MODEL,
   ONBOARDING_STEP_PREPARE_OUTPAINT,
-  ONBOARDING_STEPS,
   ONBOARDING_TARGET_CANVAS,
   ONBOARDING_TARGET_PROMPT_INPUT,
   ONBOARDING_TARGET_SETUP_DIALOG,
   ONBOARDING_TARGET_UPLOAD_BUTTON,
   getOnboardingDocumentTargetRect,
+  getLocalizedOnboardingSteps,
   getNextOnboardingStepIndex,
   getOnboardingStepState,
   shouldAutoAdvanceOnboardingStep,
@@ -27,6 +27,8 @@ import {
   type OnboardingStepDefinition,
   type OnboardingTargetId,
 } from '../lib/onboardingTour'
+import { useI18n } from '../i18n/useI18n'
+import { localizeJobMessage } from '../i18n/metadata'
 import { Button } from './ui/button'
 import { Progress } from './ui/progress'
 
@@ -96,14 +98,16 @@ export function OnboardingTour({
   onUseOutpaint,
   onGenerate,
 }: OnboardingTourProps) {
+  const { t } = useI18n()
   const [open, setOpen] = useState(true)
   const [stepIndex, setStepIndex] = useState(0)
   const [targetRect, setTargetRect] = useState<TourTargetRect | null>(null)
   const prefersReducedMotion = useReducedMotion()
-  const step = ONBOARDING_STEPS[stepIndex] ?? ONBOARDING_STEPS[0]
+  const localizedSteps = useMemo(() => getLocalizedOnboardingSteps(t), [t])
+  const step = localizedSteps[stepIndex] ?? localizedSteps[0]
   const stepState = getOnboardingStepState(step.id, progress)
   const targetId = activeTargetId(step, modelSetupOpen)
-  const lastStep = stepIndex === ONBOARDING_STEPS.length - 1
+  const lastStep = stepIndex === localizedSteps.length - 1
   const percent = Math.round((modelLoadProgress?.progress ?? 0) * 100)
 
   const refreshTargetRect = useCallback(() => {
@@ -266,7 +270,7 @@ export function OnboardingTour({
           className="onboarding-popover"
           role="dialog"
           aria-modal="false"
-          aria-label="Guided onboarding"
+          aria-label={t('onboarding.dialogLabel')}
           style={popoverStyle}
           initial={prefersReducedMotion ? false : { opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
@@ -279,8 +283,8 @@ export function OnboardingTour({
               type="button"
               variant="ghost"
               size="smallIcon"
-              aria-label="Skip tour"
-              title="Skip tour"
+              aria-label={t('common.skipTour')}
+              title={t('common.skipTour')}
               onClick={closeTour}
             >
               <X size={15} />
@@ -297,8 +301,8 @@ export function OnboardingTour({
             modelLoadProgress={modelLoadProgress}
             percent={percent}
           />
-          <div className="onboarding-progress-dots" aria-label="Tour progress">
-            {ONBOARDING_STEPS.map((item, index) => (
+          <div className="onboarding-progress-dots" aria-label={t('onboarding.tourProgress')}>
+            {localizedSteps.map((item, index) => (
               <span
                 key={item.id}
                 className={index === stepIndex ? 'onboarding-progress-dot-active' : ''}
@@ -314,7 +318,7 @@ export function OnboardingTour({
               onClick={previousStep}
             >
               <ChevronLeft size={15} />
-              Back
+              {t('common.back')}
             </Button>
             {step.primaryAction !== ONBOARDING_ACTION_NONE ? (
               <Button
@@ -332,7 +336,7 @@ export function OnboardingTour({
                 {progress.modelLoading && step.id === ONBOARDING_STEP_LOAD_MODEL ? (
                   <Loader2 className="spin-icon" size={15} />
                 ) : null}
-                {primaryActionLabel(step, progress, modelSetupOpen, modelLoadDisabled)}
+                {primaryActionLabel(step, progress, modelSetupOpen, modelLoadDisabled, t)}
               </Button>
             ) : null}
             <Button
@@ -342,7 +346,7 @@ export function OnboardingTour({
               disabled={!stepState.canContinue}
               onClick={nextStep}
             >
-              {lastStep ? 'Finish' : 'Next'}
+              {lastStep ? t('common.finish') : t('common.next')}
               {!lastStep ? <ChevronRight size={15} /> : null}
             </Button>
           </div>
@@ -363,11 +367,16 @@ function StepStatus({
   modelLoadProgress: ModelLoadProgress | null
   percent: number
 }) {
+  const { t } = useI18n()
   if (step.id === ONBOARDING_STEP_LOAD_MODEL && stepState.waiting) {
     return (
       <div className="onboarding-wait-block">
         <div className="job-row">
-          <span>{modelLoadProgress?.message ?? 'Preparing the model.'}</span>
+          <span>
+            {modelLoadProgress?.message
+              ? localizeJobMessage(modelLoadProgress.message, t)
+              : t('onboarding.preparingModel')}
+          </span>
           <span>{percent}%</span>
         </div>
         <Progress value={percent} />
@@ -379,12 +388,12 @@ function StepStatus({
     )
   }
   if (!stepState.complete) {
-    return <div className="onboarding-status">Required before continuing</div>
+    return <div className="onboarding-status">{t('common.requiredBeforeContinuing')}</div>
   }
   return (
     <div className="onboarding-status onboarding-status-complete">
       <Check size={14} />
-      Ready
+      {t('common.ready')}
     </div>
   )
 }
@@ -404,20 +413,21 @@ function primaryActionLabel(
   progress: OnboardingProgressState,
   modelSetupOpen: boolean,
   modelLoadDisabled: boolean,
+  t: (key: string) => string,
 ): string {
   if (step.id !== ONBOARDING_STEP_LOAD_MODEL) {
     return step.primaryLabel
   }
   if (progress.modelLoaded) {
-    return 'Continue'
+    return t('common.continue')
   }
   if (progress.modelLoading) {
-    return 'Loading model'
+    return t('onboarding.loadingModel')
   }
   if (modelLoadDisabled) {
-    return 'Open setup'
+    return t('onboarding.openSetup')
   }
-  return modelSetupOpen ? 'Load model' : 'Load recommended model'
+  return modelSetupOpen ? step.primaryLabel : t('onboarding.loadRecommendedModel')
 }
 
 function primaryActionDisabled(
@@ -479,15 +489,17 @@ function documentBoundsForStep(
     return imageBounds
   }
   if (stepId === ONBOARDING_STEP_PREPARE_OUTPAINT) {
-    return outpaintFrame
+    return imageBounds ?? outpaintFrame
   }
   return null
 }
 
 function ModelLoadingLessons() {
+  const { t } = useI18n()
   const [messageIndex, setMessageIndex] = useState(0)
   const prefersReducedMotion = useReducedMotion()
   const message = MODEL_LOADING_MESSAGES[messageIndex] ?? MODEL_LOADING_MESSAGES[0]
+  const messageKey = loadingMessageKey(messageIndex)
   useEffect(() => {
     const timer = window.setInterval(() => {
       setMessageIndex((current) => (current + 1) % MODEL_LOADING_MESSAGES.length)
@@ -498,22 +510,22 @@ function ModelLoadingLessons() {
   return (
     <div className="onboarding-lesson-block" aria-live="polite">
       <div className="onboarding-message-header">
-        <span>{message.title}</span>
+        <span>{t(`onboarding.lessons.${messageKey}.title`, {}, message.title)}</span>
         <span>{messageIndex + 1}/{MODEL_LOADING_MESSAGES.length}</span>
       </div>
       <AnimatePresence mode="wait" initial={false}>
         <motion.p
-          key={message.title}
+          key={messageKey}
           className="onboarding-lesson-body"
           initial={prefersReducedMotion ? false : { opacity: 0, y: 6 }}
           animate={{ opacity: 1, y: 0 }}
           exit={prefersReducedMotion ? undefined : { opacity: 0, y: -6 }}
           transition={{ duration: 0.22 }}
         >
-          {message.body}
+          {t(`onboarding.lessons.${messageKey}.body`, {}, message.body)}
         </motion.p>
       </AnimatePresence>
-      <div className="onboarding-message-dots" aria-label="Loading message progress">
+      <div className="onboarding-message-dots" aria-label={t('onboarding.loadingMessageProgress')}>
         {MODEL_LOADING_MESSAGES.map((item, index) => (
           <span
             key={item.title}
@@ -523,6 +535,19 @@ function ModelLoadingLessons() {
       </div>
     </div>
   )
+}
+
+function loadingMessageKey(index: number): string {
+  if (index === 1) {
+    return 'context'
+  }
+  if (index === 2) {
+    return 'faster'
+  }
+  if (index === 3) {
+    return 'next'
+  }
+  return 'warming'
 }
 
 function getSpotlightStyle(targetRect: TourTargetRect | null): CSSProperties {

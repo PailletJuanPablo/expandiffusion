@@ -30,6 +30,8 @@ import {
   getModelSetupDetails,
 } from '../lib/modelSetupExperience'
 import { ONBOARDING_TARGET_SETUP_DIALOG } from '../lib/onboardingTour'
+import { useI18n } from '../i18n/useI18n'
+import { localizeAdapterLabel, localizeJobMessage } from '../i18n/metadata'
 import { PluginManagerSection } from './PluginManagerSection'
 import { SchemaControl } from './SchemaControl'
 import { Button } from './ui/button'
@@ -129,6 +131,7 @@ export function ModelSetupDialog({
   onPluginToggle,
   onParameterChange,
 }: ModelSetupDialogProps) {
+  const { t } = useI18n()
   const [showExperimentalAdapters, setShowExperimentalAdapters] = useState(false)
   const [activeTab, setActiveTab] = useState<'model' | 'plugins'>('model')
   const adapterGroups = useMemo(
@@ -139,8 +142,8 @@ export function ModelSetupDialog({
     (adapter) => adapter.id === selectedAdapterId,
   )
   const showMoreOptions = showExperimentalAdapters || selectedMoreOption
-  const modelSources = getModelSources(selectedAdapter)
-  const activeSource = getActiveModelSource(selectedAdapter, modelSource)
+  const modelSources = getModelSources(selectedAdapter, t)
+  const activeSource = getActiveModelSource(selectedAdapter, modelSource, t)
   const runtimeControls = controlsForSection(
     selectedAdapter?.load_controls ?? [],
     CONTROL_SECTION_RUNTIME,
@@ -155,27 +158,27 @@ export function ModelSetupDialog({
       className="setup-overlay"
       role="dialog"
       aria-modal="true"
-      aria-label="Model setup"
+      aria-label={t('modelSetup.title')}
     >
       <div className="setup-dialog" data-tour-id={ONBOARDING_TARGET_SETUP_DIALOG}>
         <div className="setup-header">
           <div>
-            <h2>Model setup</h2>
-            <p>{runtime?.note ?? 'Waiting for backend runtime.'}</p>
+            <h2>{t('modelSetup.title')}</h2>
+            <p>{runtime?.note ?? t('modelSetup.waitingRuntime')}</p>
           </div>
           <Button
             type="button"
             variant="ghost"
             size="smallIcon"
             className="setup-close-button"
-            aria-label="Close dialog"
-            title="Close"
+            aria-label={t('common.close')}
+            title={t('common.close')}
             onClick={onClose}
           >
             <X size={16} />
           </Button>
         </div>
-        <div className="setup-tabs" role="tablist" aria-label="Setup sections">
+        <div className="setup-tabs" role="tablist" aria-label={t('modelSetup.sections')}>
           <button
             type="button"
             className={activeTab === 'model' ? 'setup-tab setup-tab-active' : 'setup-tab'}
@@ -183,7 +186,7 @@ export function ModelSetupDialog({
             aria-selected={activeTab === 'model'}
             onClick={() => setActiveTab('model')}
           >
-            Model
+            {t('modelSetup.model')}
           </button>
           <button
             type="button"
@@ -192,21 +195,20 @@ export function ModelSetupDialog({
             aria-selected={activeTab === 'plugins'}
             onClick={() => setActiveTab('plugins')}
           >
-            Plugins
+            {t('modelSetup.plugins')}
             <span>{plugins.filter((plugin) => plugin.enabled).length}/{plugins.length}</span>
           </button>
         </div>
         {activeTab === 'model' ? (
           <>
-            <div className="setup-main" role="tabpanel" aria-label="Model">
+            <div className="setup-main" role="tabpanel" aria-label={t('modelSetup.model')}>
               <div className="setup-grid">
                 <section className="setup-section">
               <div className="section-heading">
-                <span>Choose a model type</span>
+                <span>{t('modelSetup.chooseModelType')}</span>
               </div>
               <p className="setup-helper-text">
-                Start with the recommended profile. Experimental families and
-                technical variants stay under more options.
+                {t('modelSetup.helper')}
               </p>
               <AdapterChoiceGroup
                 adapters={adapterGroups.primary}
@@ -229,8 +231,8 @@ export function ModelSetupDialog({
                     ) : (
                       <ChevronRight size={16} />
                     )}
-                    <span>More options</span>
-                    <small>Flux, Chroma and technical profiles</small>
+                    <span>{t('modelSetup.moreOptions')}</span>
+                    <small>{t('modelSetup.moreOptionsHint')}</small>
                   </button>
                   {showMoreOptions ? (
                     <AdapterChoiceGroup
@@ -243,7 +245,7 @@ export function ModelSetupDialog({
                 </div>
               ) : null}
               <label className="field-label">
-                Model source
+                {t('modelSetup.modelSource')}
                 <select
                   value={activeSource.id}
                   disabled={loading}
@@ -277,10 +279,10 @@ export function ModelSetupDialog({
                 </section>
                 <section className="setup-section">
               <div className="section-heading">
-                <span>Runtime</span>
+                <span>{t('modelSetup.runtime')}</span>
               </div>
               {runtimeControls.map((control) => {
-                const renderedControl = runtimeControl(control, runtime)
+                const renderedControl = runtimeControl(control, runtime, t)
                 return (
                   <SchemaControl
                     key={control.id}
@@ -310,7 +312,7 @@ export function ModelSetupDialog({
                 {extensionControls.length > 0 ? (
                   <section className="setup-section setup-section-wide">
                 <div className="section-heading">
-                  <span>Load-time extensions</span>
+                  <span>{t('modelSetup.loadTimeExtensions')}</span>
                 </div>
                 {extensionControls.map((control) => (
                   <SchemaControl
@@ -342,7 +344,7 @@ export function ModelSetupDialog({
                 onClick={onLoad}
               >
                 <Power size={16} />
-                {loadButtonLabel(loading, activeModel, selectedAdapterId)}
+                {loadButtonLabel(loading, activeModel, selectedAdapterId, t)}
               </Button>
               {loading ? (
                 <Button
@@ -353,7 +355,7 @@ export function ModelSetupDialog({
                   onClick={onCancelLoad}
                 >
                   <Square size={15} />
-                  {cancelPending ? 'Cancelling' : 'Cancel load'}
+                  {cancelPending ? t('modelSetup.cancelling') : t('modelSetup.cancelLoad')}
                 </Button>
               ) : (
                 <Button
@@ -364,13 +366,17 @@ export function ModelSetupDialog({
                   onClick={onUnload}
                 >
                   <PowerOff size={16} />
-                  {unloading ? 'Unloading' : 'Unload model'}
+                  {unloading ? t('modelSetup.unloading') : t('modelSetup.unloadModel')}
                 </Button>
               )}
             </div>
           </>
         ) : (
-          <div className="setup-main setup-plugin-pane" role="tabpanel" aria-label="Plugins">
+          <div
+            className="setup-main setup-plugin-pane"
+            role="tabpanel"
+            aria-label={t('modelSetup.plugins')}
+          >
             <PluginManagerSection
               plugins={plugins}
               controls={pluginControls}
@@ -398,8 +404,9 @@ function AdapterChoiceGroup({
   loading: boolean
   onAdapterChange: (adapterId: string) => void
 }) {
+  const { t } = useI18n()
   if (adapters.length === 0) {
-    return <div className="adapter-choice-empty">No model profiles available.</div>
+    return <div className="adapter-choice-empty">{t('modelSetup.noProfiles')}</div>
   }
   return (
     <div className="adapter-choice-list">
@@ -427,7 +434,8 @@ function AdapterChoice({
   loading: boolean
   onSelect: () => void
 }) {
-  const details = getModelSetupDetails(adapter)
+  const { t } = useI18n()
+  const details = getModelSetupDetails(adapter, t)
   return (
     <button
       type="button"
@@ -438,12 +446,12 @@ function AdapterChoice({
     >
       <span className="adapter-choice-header">
         <strong>{adapter.label}</strong>
-        {selected ? <span>Selected</span> : null}
+        {selected ? <span>{t('common.selected')}</span> : null}
       </span>
       <span className="adapter-choice-summary">{details.summary}</span>
       <span className="adapter-choice-best-for">{details.bestFor}</span>
       <span className="adapter-choice-limits">
-        <strong>Limits</strong>
+        <strong>{t('modelSetup.limits')}</strong>
         <span>{details.limitations.join(' ')}</span>
       </span>
     </button>
@@ -451,14 +459,21 @@ function AdapterChoice({
 }
 
 function ModelLoadedStatus({ activeModel }: { activeModel: ModelInfo | undefined }) {
+  const { t } = useI18n()
   if (!activeModel?.loaded) {
-    return <div className="model-load-status">No model loaded.</div>
+    return <div className="model-load-status">{t('modelSetup.noModelLoaded')}</div>
   }
   return (
     <div className="model-load-status">
-      <span>Loaded model</span>
+      <span>{t('modelSetup.loadedModel')}</span>
       <strong>{activeModel.adapter_label}</strong>
-      <span>{activeModel.model_url ?? activeModel.model_id ?? activeModel.local_path ?? activeModel.single_file_path ?? activeModel.adapter_id}</span>
+      <span>
+        {activeModel.model_url ??
+          activeModel.model_id ??
+          activeModel.local_path ??
+          activeModel.single_file_path ??
+          localizeAdapterLabel(activeModel.adapter_id, t)}
+      </span>
     </div>
   )
 }
@@ -467,20 +482,27 @@ function loadButtonLabel(
   loading: boolean,
   activeModel: ModelInfo | undefined,
   selectedAdapterId: string,
+  t: (key: string) => string,
 ): string {
   if (loading) {
-    return 'Loading model'
+    return t('modelSetup.loadingModel')
   }
   if (!activeModel?.loaded) {
-    return 'Load model'
+    return t('modelSetup.loadModel')
   }
-  return activeModel.adapter_id === selectedAdapterId ? 'Reload model' : 'Switch model'
+  return activeModel.adapter_id === selectedAdapterId
+    ? t('modelSetup.reloadModel')
+    : t('modelSetup.switchModel')
 }
 
 function ModelLoadProgressBlock({ progress }: { progress: ModelLoadProgress | null }) {
+  const { t } = useI18n()
   const percent = Math.round((progress?.progress ?? 0) * 100)
   const files = progress?.files_total
-    ? `${progress.files_done ?? 0}/${progress.files_total} files`
+    ? t('modelSetup.files', {
+        done: progress.files_done ?? 0,
+        total: progress.files_total,
+      })
     : null
   const fileBytes = progress?.file_bytes_total
     ? `${formatBytes(progress.file_bytes_done ?? 0)} / ${formatBytes(progress.file_bytes_total)}`
@@ -488,12 +510,19 @@ function ModelLoadProgressBlock({ progress }: { progress: ModelLoadProgress | nu
       ? formatBytes(progress.file_bytes_done)
       : null
   const totalBytes = progress?.bytes_total
-    ? `${formatBytes(progress.bytes_done ?? 0)} / ${formatBytes(progress.bytes_total)} total`
+    ? t('modelSetup.totalBytes', {
+        done: formatBytes(progress.bytes_done ?? 0),
+        total: formatBytes(progress.bytes_total),
+      })
     : null
   return (
     <div className="job-block">
       <div className="job-row">
-        <span>{progress?.message ?? 'Starting model load.'}</span>
+        <span>
+          {progress?.message
+            ? localizeJobMessage(progress.message, t)
+            : t('modelSetup.startingLoad')}
+        </span>
         <span>{percent}%</span>
       </div>
       <Progress value={percent} />
@@ -517,14 +546,17 @@ function formatBytes(value: number): string {
 }
 
 function RuntimeDetails({ runtime }: { runtime: RuntimeInfo | undefined }) {
+  const { t } = useI18n()
   if (!runtime) {
-    return <div className="runtime-details">Runtime unavailable.</div>
+    return <div className="runtime-details">{t('modelSetup.runtimeUnavailable')}</div>
   }
   return (
     <div className="runtime-details">
-      <span>torch {runtime.torch_version ?? 'not installed'}</span>
-      <span>torchvision {runtime.torchvision_version ?? 'not installed'}</span>
-      <span>CUDA {runtime.cuda_available ? runtime.cuda_version ?? 'available' : 'not available'}</span>
+      <span>torch {runtime.torch_version ?? t('common.notInstalled')}</span>
+      <span>torchvision {runtime.torchvision_version ?? t('common.notInstalled')}</span>
+      <span>
+        CUDA {runtime.cuda_available ? runtime.cuda_version ?? t('common.available') : t('common.notAvailable')}
+      </span>
       {runtime.devices.map((device) => (
         <span key={device.id}>{device.id} / {device.name}</span>
       ))}
@@ -532,14 +564,18 @@ function RuntimeDetails({ runtime }: { runtime: RuntimeInfo | undefined }) {
   )
 }
 
-function runtimeControl(control: ControlSchema, runtime: RuntimeInfo | undefined): ControlSchema {
+function runtimeControl(
+  control: ControlSchema,
+  runtime: RuntimeInfo | undefined,
+  t: (key: string) => string,
+): ControlSchema {
   if (control.id !== 'device') {
     return control
   }
   return {
     ...control,
     options: [
-      { id: 'auto', label: 'Best available' },
+      { id: 'auto', label: t('modelSetup.bestAvailable') },
       ...(runtime?.devices.map((device) => ({
         id: device.id,
         label: `${device.id} / ${device.name}`,

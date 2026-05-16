@@ -67,6 +67,7 @@ export async function loadProjectArchive(file: File): Promise<EditorDocument> {
   return {
     ...project.document,
     controlStrokes: project.document.controlStrokes ?? [],
+    semanticMaskDataUrl: project.document.semanticMaskDataUrl ?? null,
     rasterDataUrl,
     rasterBounds: project.document.rasterBounds ?? (
       rasterDataUrl

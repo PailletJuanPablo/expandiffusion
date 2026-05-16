@@ -1,0 +1,6 @@
+{
+  "id": "object-selector",
+  "label": "Object Selector",
+  "version": "0.1.0",
+  "description": "Florence and SAM powered object masks for erasing or inpaint."
+}

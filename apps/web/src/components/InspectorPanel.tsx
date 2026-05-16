@@ -1,19 +1,32 @@
 ﻿import {
+  ArrowDown,
+  ArrowLeft,
+  ArrowRight,
+  ArrowUp,
   Check,
   Captions,
   ChevronLeft,
   ChevronDown,
   ChevronRight,
   Eraser,
+  Eye,
+  EyeOff,
   Frame,
+  Gauge,
   Hand,
   ListOrdered,
+  Maximize2,
   MousePointer2,
   Paintbrush,
   Palette,
+  PanelBottom,
+  PanelLeft,
+  PanelRight,
+  PanelTop,
   Play,
   RotateCcw,
   Settings2,
+  ShieldCheck,
   SlidersHorizontal,
   Square,
   TextSearch,
@@ -28,6 +41,8 @@ import {
   CONTROL_GUIDE_MASK_MODE_OPTIONS,
   CONTROL_GUIDE_COLORS,
   DIRECTIONAL_OUTPAINT_MIN_SIZE,
+  ERASER_MODE_BRUSH,
+  ERASER_MODE_RECTANGLE,
   MAX_CONTROL_GUIDE_STRENGTH,
   MAX_ERASER_HARDNESS,
   MAX_BRUSH_SIZE,
@@ -48,10 +63,12 @@ import {
   TOOL_SELECT,
   WORKSPACE_MODE_EXPAND_IMAGE,
   WORKSPACE_MODE_FREE_EDIT,
+  PLUGIN_TOOL_TARGET_CANVAS,
   PLUGIN_TOOL_TARGET_IMAGE,
   pluginToolIdFromEditorTool,
   type ControlGuideMaskMode,
   type EditorTool,
+  type EraserMode,
   type GenerationMode,
   type OutpaintStrategy,
   type WorkspaceMode,
@@ -78,7 +95,12 @@ import {
   runPluginAction,
   unloadModel,
 } from "../lib/apiClient";
-import { renderPluginActionInput } from "../lib/canvasRender";
+import {
+  eraseSemanticMaskFromDocument,
+  renderMaskOverlayDataUrl,
+  renderPluginMaskToDocumentMask,
+  renderPluginActionInput,
+} from "../lib/canvasRender";
 import {
   adapterIdForControlGuideMode,
   controlnetModelIdForAdapter,
@@ -96,9 +118,13 @@ import {
   ONBOARDING_TARGET_TOPBAR_MODEL,
 } from "../lib/onboardingTour";
 import { adapterIdForWorkspaceMode, isExpandImageAdapter } from "../lib/workspaceMode";
+import { useI18n } from "../i18n/useI18n";
+import type { TranslateFunction } from "../i18n/i18n";
+import { localizeAdapterLabel, localizeJobMessage, localizeJobStatus } from "../i18n/metadata";
 import { useEditorStore } from "../store/editorStore";
 import { CorrectionPipelineSection } from "./CorrectionPipelineSection";
 import { GenerationControls } from "./GenerationControls";
+import { LanguageSelector } from "./LanguageSelector";
 import { ModelSetupDialog } from "./ModelSetupDialog";
 import { NumberStepper } from "./NumberStepper";
 import { OnboardingTour } from "./OnboardingTour";
@@ -157,7 +183,35 @@ const FIXED_EXPAND_RENDER_SCALE_OPTIONS = [
   { id: "balanced", label: "Balanced" },
   { id: "safe", label: "Safe" },
   { id: "custom", label: "Custom" },
-];
+] as const;
+
+const EXPAND_DIRECTION_ICONS: Record<
+  GenerationParameters["outpaint_direction"],
+  LucideIcon
+> = {
+  right: ArrowRight,
+  left: ArrowLeft,
+  down: ArrowDown,
+  up: ArrowUp,
+  around: Maximize2,
+};
+
+const RENDER_SCALE_ICONS: Record<
+  (typeof FIXED_EXPAND_RENDER_SCALE_OPTIONS)[number]["id"],
+  LucideIcon
+> = {
+  full: Maximize2,
+  balanced: Gauge,
+  safe: ShieldCheck,
+  custom: SlidersHorizontal,
+};
+
+const OVERLAP_SIDE_ICONS = {
+  left: PanelLeft,
+  right: PanelRight,
+  top: PanelTop,
+  bottom: PanelBottom,
+} as const;
 
 export function InspectorPanel() {
   const [setupOpen, setSetupOpen] = useState(false);
@@ -165,6 +219,7 @@ export function InspectorPanel() {
   const [loraText, setLoraText] = useState("");
   const [textualInversionText, setTextualInversionText] = useState("");
   const activeModelSelectionSynced = useRef(false);
+  const { t } = useI18n();
 
   const {
     runtimeQuery,
@@ -190,6 +245,7 @@ export function InspectorPanel() {
   const pendingResults = useEditorStore((state) => state.pendingResults);
   const brushSize = useEditorStore((state) => state.brushSize);
   const eraserHardness = useEditorStore((state) => state.eraserHardness);
+  const eraserMode = useEditorStore((state) => state.eraserMode);
   const controlGuideEnabled = useEditorStore(
     (state) => state.controlGuideEnabled,
   );
@@ -226,6 +282,7 @@ export function InspectorPanel() {
   const setEraserHardness = useEditorStore(
     (state) => state.setEraserHardness,
   );
+  const setEraserMode = useEditorStore((state) => state.setEraserMode);
   const setControlGuideEnabled = useEditorStore(
     (state) => state.setControlGuideEnabled,
   );
@@ -252,6 +309,10 @@ export function InspectorPanel() {
   const clearPluginPreview = useEditorStore(
     (state) => state.clearPluginPreview,
   );
+  const applySemanticMask = useEditorStore((state) => state.applySemanticMask);
+  const commitFlattenedErase = useEditorStore(
+    (state) => state.commitFlattenedErase,
+  );
   const setErrorMessage = useEditorStore((state) => state.setErrorMessage);
 
   const adapters = useMemo(
@@ -273,7 +334,7 @@ export function InspectorPanel() {
   const activePluginTool =
     pluginTools.find((pluginTool) => pluginTool.id === activePluginToolId) ??
     null;
-  const toolContext = getToolContext(tool, activePluginTool);
+  const toolContext = getToolContext(tool, activePluginTool, t);
   const expandImageActive = workspaceMode === WORKSPACE_MODE_EXPAND_IMAGE;
   const expandImageAdapterActive = isExpandImageAdapter(selectedAdapterId);
   const generationToolPanelActive = !activePluginTool;
@@ -319,10 +380,10 @@ export function InspectorPanel() {
   );
   const generationActionLabel =
     expandImageActive
-      ? "Expand image"
+      ? t("inspector.expandImage")
       : generationMode === GENERATION_MODE_INPAINT
-      ? "Generate inpaint"
-      : "Generate outpaint";
+      ? t("inspector.generateInpaint")
+      : t("inspector.generateOutpaint");
   const hiddenGenerationControlIds =
     expandImageActive || directionalOutpaintActive
       ? WORKFLOW_CONTROL_IDS
@@ -336,8 +397,8 @@ export function InspectorPanel() {
   );
   const controlGuideLabel =
     selectedAdapter?.capabilities.controlnet || controlGuideTargetAdapterId
-      ? "ControlNet sketch"
-      : "Native sketch";
+      ? t("inspector.controlNetSketch")
+      : t("inspector.nativeSketch");
   const effectiveControlnetModelId = controlnetModelIdForAdapterValue(
     selectedAdapter,
     controlnetModelId,
@@ -525,6 +586,8 @@ export function InspectorPanel() {
     },
   });
 
+  const selectedAdapterLabel =
+    selectedAdapter?.label ?? localizeAdapterLabel(selectedAdapterId, t);
   const onboardingProgress = {
     modelLoaded,
     modelLoading: loadMutation.isPending,
@@ -532,7 +595,7 @@ export function InspectorPanel() {
     outpaintReady:
       modelLoaded &&
       Boolean(documentState.rasterDataUrl) &&
-      workspaceMode === WORKSPACE_MODE_FREE_EDIT &&
+      workspaceMode === WORKSPACE_MODE_EXPAND_IMAGE &&
       generationMode === GENERATION_MODE_OUTPAINT,
     generationStarted:
       Boolean(currentJob) || pendingResults.length > 0 || generateMutation.isPending,
@@ -551,9 +614,7 @@ export function InspectorPanel() {
   };
   const useOnboardingOutpaint = () => {
     setPanelCollapsed(false);
-    setWorkspaceMode(WORKSPACE_MODE_FREE_EDIT);
-    setGenerationMode(GENERATION_MODE_OUTPAINT);
-    setTool(TOOL_OUTPAINT_FRAME);
+    changeWorkspaceMode(WORKSPACE_MODE_EXPAND_IMAGE);
   };
   const generateFromOnboarding = () => {
     if (onboardingGenerationDisabled) {
@@ -566,20 +627,21 @@ export function InspectorPanel() {
     <>
       <header className="studio-topbar">
         <div className="topbar-project">
-          <span className="topbar-label">Project</span>
+          <span className="topbar-label">{t("topbar.project")}</span>
           <strong>{documentState.id.slice(0, 8)}</strong>
         </div>
         <div className="topbar-model" data-tour-id={ONBOARDING_TARGET_TOPBAR_MODEL}>
-          <span className="topbar-label">Profile</span>
+          <span className="topbar-label">{t("topbar.profile")}</span>
           <strong>
-            {selectedAdapter?.label ?? selectedAdapterId}
+            {selectedAdapterLabel}
             <span
               className={modelLoaded ? "topbar-ready-dot" : "topbar-idle-dot"}
             />
-            <span>{modelLoaded ? "Ready" : "Not loaded"}</span>
+            <span>{modelLoaded ? t("topbar.ready") : t("topbar.notLoaded")}</span>
           </strong>
         </div>
         <div className="topbar-actions">
+          <LanguageSelector />
           <Button
             type="button"
             variant="secondary"
@@ -588,7 +650,7 @@ export function InspectorPanel() {
             onClick={() => setSetupOpen(true)}
           >
             <Settings2 size={16} />
-            Setup
+            {t("common.setup")}
           </Button>
           <Button
             type="button"
@@ -601,7 +663,7 @@ export function InspectorPanel() {
           >
             <WandSparkles size={16} />
             {running || generateMutation.isPending
-              ? "Generating"
+              ? t("common.generating")
               : generationActionLabel}
           </Button>
         </div>
@@ -616,7 +678,7 @@ export function InspectorPanel() {
               size="smallIcon"
               className="inspector-collapse-button"
               onClick={() => setPanelCollapsed(false)}
-              title="Expand inspector"
+              title={t("inspector.expandInspector")}
             >
               <ChevronLeft size={16} />
             </Button>
@@ -647,7 +709,7 @@ export function InspectorPanel() {
                 size="smallIcon"
                 className="mini-action-button"
                 onClick={() => setSetupOpen(true)}
-                title="Model setup"
+                title={t("inspector.modelSetup")}
               >
                 <Settings2 size={17} />
               </Button>
@@ -664,7 +726,7 @@ export function InspectorPanel() {
                 )}
                 <strong>
                   {expandImageActive && generationToolPanelActive
-                    ? "Expand image"
+                    ? t("inspector.expandImage")
                     : toolContext.title}
                 </strong>
               </div>
@@ -674,7 +736,7 @@ export function InspectorPanel() {
                 size="smallIcon"
                 className="inspector-collapse-button"
                 onClick={() => setPanelCollapsed(true)}
-                title="Collapse inspector"
+                title={t("inspector.collapseInspector")}
               >
                 <ChevronRight size={16} />
               </Button>
@@ -685,11 +747,11 @@ export function InspectorPanel() {
                   <TabsList>
                     <TabsTrigger value="generate">
                       <WandSparkles size={14} />
-                      Generate
+                      {t("inspector.generate")}
                     </TabsTrigger>
                     <TabsTrigger value="workflow">
                       <ListOrdered size={14} />
-                      Workflow
+                      {t("inspector.workflow")}
                     </TabsTrigger>
                   </TabsList>
                   <TabsContent value="generate">
@@ -717,12 +779,14 @@ export function InspectorPanel() {
                         viewport={viewport}
                         brushSize={brushSize}
                         eraserHardness={eraserHardness}
+                        eraserMode={eraserMode}
                         controlGuideColor={controlGuideColor}
                         controlGuideStrength={controlGuideStrength}
                         controlGuideMaskMode={controlGuideMaskMode}
                         onSelectionChange={setSelection}
                         onBrushSizeChange={setBrushSize}
                         onEraserHardnessChange={setEraserHardness}
+                        onEraserModeChange={setEraserMode}
                         onControlGuideColorChange={setControlGuideColor}
                         onControlGuideStrengthChange={setControlGuideStrength}
                         onControlGuideMaskModeChange={setControlGuideMaskMode}
@@ -767,6 +831,8 @@ export function InspectorPanel() {
                       onReferenceChange={updateReference}
                       onPluginPreviewChange={setPluginPreview}
                       onPluginPreviewClear={clearPluginPreview}
+                      onSemanticMaskApply={applySemanticMask}
+                      onFlattenedErase={commitFlattenedErase}
                       onError={setErrorMessage}
                     />
                   ) : (
@@ -778,12 +844,14 @@ export function InspectorPanel() {
                       viewport={viewport}
                       brushSize={brushSize}
                       eraserHardness={eraserHardness}
+                      eraserMode={eraserMode}
                       controlGuideColor={controlGuideColor}
                       controlGuideStrength={controlGuideStrength}
                       controlGuideMaskMode={controlGuideMaskMode}
                       onSelectionChange={setSelection}
                       onBrushSizeChange={setBrushSize}
                       onEraserHardnessChange={setEraserHardness}
+                      onEraserModeChange={setEraserMode}
                       onControlGuideColorChange={setControlGuideColor}
                       onControlGuideStrengthChange={setControlGuideStrength}
                       onControlGuideMaskModeChange={setControlGuideMaskMode}
@@ -801,7 +869,8 @@ export function InspectorPanel() {
                   <div className="job-block">
                     <div className="job-row">
                       <span>
-                        {currentJob.status}: {currentJob.message}
+                        {localizeJobStatus(currentJob.status, t)}:{" "}
+                        {localizeJobMessage(currentJob.message, t)}
                       </span>
                       <span>{Math.round(currentJob.progress * 100)}%</span>
                     </div>
@@ -820,7 +889,7 @@ export function InspectorPanel() {
                 >
                   <WandSparkles size={17} />
                   {running || generateMutation.isPending
-                    ? "Generating"
+                    ? t("common.generating")
                     : generationActionLabel}
                 </Button>
                 {running ? (
@@ -829,8 +898,8 @@ export function InspectorPanel() {
                     variant="danger"
                     size="large"
                     className="sticky-icon-action"
-                    title="Cancel job"
-                    aria-label="Cancel job"
+                    title={t("inspector.cancelJob")}
+                    aria-label={t("inspector.cancelJob")}
                     onClick={cancelRunningJob}
                   >
                     <Square size={15} />
@@ -841,8 +910,8 @@ export function InspectorPanel() {
                     variant="secondary"
                     size="large"
                     className="sticky-icon-action"
-                    title="Retry generation"
-                    aria-label="Retry generation"
+                    title={t("inspector.generate")}
+                    aria-label={t("inspector.generate")}
                     disabled={!modelLoaded}
                     onClick={() => generateMutation.mutate()}
                   >
@@ -953,8 +1022,9 @@ function OutpaintMethodSwitch({
   fixedExpandAvailable: boolean;
   onChange: (mode: WorkspaceMode) => void;
 }) {
+  const { t } = useI18n();
   return (
-    <div className="outpaint-method-switch" aria-label="Outpaint method">
+    <div className="outpaint-method-switch" aria-label={t("inspector.editMode")}>
       <button
         type="button"
         className={
@@ -966,7 +1036,7 @@ function OutpaintMethodSwitch({
         onClick={() => onChange(WORKSPACE_MODE_FREE_EDIT)}
       >
         <Paintbrush size={15} />
-        <span>Free frame</span>
+        <span>{t("inspector.freeFrame")}</span>
       </button>
       <button
         type="button"
@@ -979,13 +1049,13 @@ function OutpaintMethodSwitch({
         disabled={!fixedExpandAvailable}
         title={
           fixedExpandAvailable
-            ? "Use fixed SDXL Fill expansion."
-            : "Load the SDXL Fill profile to use fixed expansion."
+            ? t("inspector.expandImage")
+            : t("modelSetup.loadModel")
         }
         onClick={() => onChange(WORKSPACE_MODE_EXPAND_IMAGE)}
       >
         <Frame size={15} />
-        <span>Fixed expand</span>
+        <span>{t("inspector.expandImage")}</span>
       </button>
     </div>
   );
@@ -1000,6 +1070,8 @@ function PluginToolPanel({
   onReferenceChange,
   onPluginPreviewChange,
   onPluginPreviewClear,
+  onSemanticMaskApply,
+  onFlattenedErase,
   onError,
 }: {
   tool: PluginToolInfo;
@@ -1013,17 +1085,22 @@ function PluginToolPanel({
   ) => void;
   onPluginPreviewChange: (preview: PluginImagePreview) => void;
   onPluginPreviewClear: (toolId?: string) => void;
+  onSemanticMaskApply: (maskDataUrl: string) => void;
+  onFlattenedErase: (dataUrl: string) => void;
   onError: (message: string | null) => void;
 }) {
+  const { t } = useI18n();
   const [controlValues, setControlValues] = useState<Record<string, unknown>>(
     {},
   );
   const [result, setResult] = useState<{
     result: PluginActionResult;
     target: CanvasSelectionTarget;
+    actionTarget: Record<string, unknown>;
   } | null>(null);
   const [previewPending, setPreviewPending] = useState(false);
   const previewSequence = useRef(0);
+  const autoProcessKeyRef = useRef<string | null>(null);
   const actionTarget = useMemo(
     () => getPluginToolActionTarget(tool, canvasSelectionTarget),
     [canvasSelectionTarget, tool],
@@ -1048,11 +1125,68 @@ function PluginToolPanel({
     onSuccess: (nextResult) => {
       setResult(nextResult);
       onError(null);
+      if (tool.target !== PLUGIN_TOOL_TARGET_CANVAS || !nextResult.result.mask) {
+        if (!livePreview) {
+          onPluginPreviewClear(tool.id);
+        }
+        return;
+      }
+      renderPluginMaskToDocumentMask(
+        documentState,
+        nextResult.result.mask,
+        nextResult.actionTarget,
+      )
+        .then((maskDataUrl) => renderMaskOverlayDataUrl(maskDataUrl))
+        .then((image) => {
+          onPluginPreviewChange({
+            toolId: tool.id,
+            image,
+            target: nextResult.target,
+          });
+        })
+        .catch((error) => {
+          onError(error instanceof Error ? error.message : t("errors.pluginToolFailed"));
+        });
     },
     onError: (error) => {
-      onError(error instanceof Error ? error.message : "Plugin tool failed.");
+      autoProcessKeyRef.current = null;
+      onError(error instanceof Error ? error.message : t("errors.pluginToolFailed"));
     },
   });
+
+  useEffect(() => {
+    autoProcessKeyRef.current = null;
+  }, [tool.id]);
+
+  useEffect(() => {
+    if (
+      livePreview ||
+      tool.target !== PLUGIN_TOOL_TARGET_CANVAS ||
+      actionTarget?.kind !== "canvas" ||
+      !actionTarget.point ||
+      processingDisabled
+    ) {
+      return;
+    }
+    const autoProcessKey = `${actionTargetKey}:${JSON.stringify(controlPayload)}`;
+    if (autoProcessKeyRef.current === autoProcessKey) {
+      return;
+    }
+    autoProcessKeyRef.current = autoProcessKey;
+    setResult(null);
+    onPluginPreviewClear(tool.id);
+    mutation.mutate();
+  }, [
+    actionTarget,
+    actionTargetKey,
+    controlPayload,
+    livePreview,
+    mutation,
+    onPluginPreviewClear,
+    processingDisabled,
+    tool.id,
+    tool.target,
+  ]);
 
   useEffect(() => {
     if (!livePreview) {
@@ -1108,7 +1242,7 @@ function PluginToolPanel({
           setResult(null);
           setPreviewPending(false);
           onPluginPreviewClear(tool.id);
-          onError(error instanceof Error ? error.message : "Plugin tool failed.");
+          onError(error instanceof Error ? error.message : t("errors.pluginToolFailed"));
         });
     }, 240);
     return () => window.clearTimeout(timer);
@@ -1122,6 +1256,7 @@ function PluginToolPanel({
     onPluginPreviewChange,
     onPluginPreviewClear,
     processingDisabled,
+    t,
     tool,
   ]);
 
@@ -1152,9 +1287,54 @@ function PluginToolPanel({
     onError(null);
   };
 
+  const applyMaskResult = () => {
+    if (!result?.result.mask) {
+      return;
+    }
+    renderPluginMaskToDocumentMask(
+      documentState,
+      result.result.mask,
+      result.actionTarget,
+    )
+      .then((maskDataUrl) => {
+        onSemanticMaskApply(maskDataUrl);
+        setResult(null);
+        onPluginPreviewClear(tool.id);
+        onError(null);
+      })
+      .catch((error) =>
+        onError(error instanceof Error ? error.message : t("errors.pluginToolFailed")),
+      );
+  };
+
+  const eraseMaskResult = () => {
+    if (!result?.result.mask) {
+      return;
+    }
+    renderPluginMaskToDocumentMask(
+      documentState,
+      result.result.mask,
+      result.actionTarget,
+    )
+      .then((maskDataUrl) =>
+        eraseSemanticMaskFromDocument(documentState, maskDataUrl),
+      )
+      .then((dataUrl) => {
+        onFlattenedErase(dataUrl);
+        setResult(null);
+        onPluginPreviewClear(tool.id);
+        onError(null);
+      })
+      .catch((error) =>
+        onError(error instanceof Error ? error.message : t("errors.pluginToolFailed")),
+      );
+  };
+
   return (
     <>
-      {tool.target === PLUGIN_TOOL_TARGET_IMAGE ? (
+      {tool.target === PLUGIN_TOOL_TARGET_CANVAS ? (
+        <PluginCanvasTargetSection canvasSelectionTarget={canvasSelectionTarget} />
+      ) : tool.target === PLUGIN_TOOL_TARGET_IMAGE ? (
         <PluginImageTargetSection
           documentState={documentState}
           canvasSelectionTarget={canvasSelectionTarget}
@@ -1193,10 +1373,10 @@ function PluginToolPanel({
               <Palette size={15} />
               <span>
                 {previewPending
-                  ? "Updating selected image"
+                  ? t("plugins.pluginControls")
                   : result?.result.image
-                    ? "Live preview on canvas"
-                    : "Select an image to preview"}
+                    ? t("inspector.applyPreview", {}, "Live preview on canvas")
+                    : t("errors.selectUploadedImage")}
               </span>
             </div>
             <div className="plugin-preview-actions">
@@ -1212,7 +1392,7 @@ function PluginToolPanel({
                 onClick={applyLivePreview}
               >
                 <Check size={14} />
-                Apply preview
+                {t("common.apply")}
               </Button>
               <Button
                 type="button"
@@ -1221,7 +1401,7 @@ function PluginToolPanel({
                 onClick={resetLivePreview}
               >
                 <RotateCcw size={14} />
-                Reset
+                {t("toolbar.undo")}
               </Button>
             </div>
           </div>
@@ -1234,21 +1414,54 @@ function PluginToolPanel({
             onClick={() => mutation.mutate()}
           >
             <PluginToolButtonIcon icon={tool.icon} />
-            {mutation.isPending ? "Processing" : "Process selection"}
+            {mutation.isPending
+              ? t("common.generating")
+              : t("inspector.processSelection", {}, "Process selection")}
           </Button>
         )}
         {!livePreview && result?.result.text ? (
           <div className="plugin-action-result">
             <div className="plugin-control-heading">
               <TextSearch size={15} />
-              <span>{tool.result_label ?? "Result"}</span>
+              <span>{tool.result_label ?? t("common.result")}</span>
             </div>
             <textarea readOnly value={result.result.text} />
           </div>
         ) : null}
+        {!livePreview && result?.result.mask ? (
+          <div className="plugin-action-result plugin-image-result">
+            <img
+              src={result.result.mask}
+              alt={t("inspector.objectMaskPreview", {}, "Object mask preview")}
+            />
+            <div className="plugin-preview-actions">
+              <Button
+                type="button"
+                variant="secondary"
+                size="compact"
+                onClick={applyMaskResult}
+              >
+                <Paintbrush size={14} />
+                {t("inspector.useAsMask", {}, "Use as mask")}
+              </Button>
+              <Button
+                type="button"
+                variant="danger"
+                size="compact"
+                onClick={eraseMaskResult}
+              >
+                <Eraser size={14} />
+                {t("inspector.eraseObject", {}, "Erase")}
+              </Button>
+            </div>
+          </div>
+        ) : null}
         {!livePreview && result?.result.image ? (
           <div className="plugin-action-result plugin-image-result">
-            <img src={result.result.image} alt="Plugin result preview" />
+            <img
+              src={result.result.image}
+              alt={t("inspector.pluginResultPreview", {}, "Plugin result preview")}
+            />
             <Button
               type="button"
               variant="secondary"
@@ -1267,7 +1480,7 @@ function PluginToolPanel({
               }}
             >
               <Check size={14} />
-              Apply to image
+              {t("common.apply")}
             </Button>
           </div>
         ) : null}
@@ -1283,6 +1496,7 @@ function PluginImageTargetSection({
   documentState: EditorDocument;
   canvasSelectionTarget: CanvasSelectionTarget;
 }) {
+  const { t } = useI18n();
   const imageSelection = getSelectedImageContext(
     documentState,
     canvasSelectionTarget,
@@ -1291,8 +1505,38 @@ function PluginImageTargetSection({
     <ImageSelectionSection selection={imageSelection} />
   ) : (
     <section className="tool-selection-context">
-      <strong>Uploaded image</strong>
-      <span>Select a base or reference image on the canvas.</span>
+      <strong>{t("inspector.uploadedImage", {}, "Uploaded image")}</strong>
+      <span>{t("inspector.selectBaseOrReference", {}, "Select a base or reference image on the canvas.")}</span>
+    </section>
+  );
+}
+
+function PluginCanvasTargetSection({
+  canvasSelectionTarget,
+}: {
+  canvasSelectionTarget: CanvasSelectionTarget;
+}) {
+  const { t } = useI18n();
+  const point =
+    canvasSelectionTarget.kind === "canvas"
+      ? canvasSelectionTarget.point
+      : undefined;
+  return (
+    <section className="tool-selection-context">
+      <strong>{t("inspector.visibleCanvas", {}, "Visible canvas")}</strong>
+      <span>
+        {point
+          ? t(
+              "inspector.objectClickSelected",
+              { x: Math.round(point.x), y: Math.round(point.y) },
+              "Click point selected.",
+            )
+          : t(
+              "inspector.objectPromptOnly",
+              {},
+              "Enter a prompt or click the object on the canvas.",
+            )}
+      </span>
     </section>
   );
 }
@@ -1307,6 +1551,9 @@ function PluginToolButtonIcon({ icon }: { icon: string }) {
   if (icon === "sliders-horizontal") {
     return <SlidersHorizontal size={16} />;
   }
+  if (icon === "wand-sparkles") {
+    return <WandSparkles size={16} />;
+  }
   return <TextSearch size={16} />;
 }
 
@@ -1314,6 +1561,11 @@ function getPluginToolActionTarget(
   tool: PluginToolInfo,
   canvasSelectionTarget: CanvasSelectionTarget,
 ): CanvasSelectionTarget | null {
+  if (tool.target === PLUGIN_TOOL_TARGET_CANVAS) {
+    return canvasSelectionTarget.kind === "canvas"
+      ? canvasSelectionTarget
+      : { kind: "canvas" };
+  }
   if (tool.target === PLUGIN_TOOL_TARGET_IMAGE) {
     return canvasSelectionTarget.kind === "raster" ||
       canvasSelectionTarget.kind === "reference"
@@ -1357,7 +1609,11 @@ async function runToolAction(
   documentState: EditorDocument,
   target: CanvasSelectionTarget,
   controls: Record<string, unknown>,
-): Promise<{ result: PluginActionResult; target: CanvasSelectionTarget }> {
+): Promise<{
+  result: PluginActionResult;
+  target: CanvasSelectionTarget;
+  actionTarget: Record<string, unknown>;
+}> {
   const input = await renderPluginActionInput(documentState, target);
   const nextResult = await runPluginAction(tool.action_id, {
     image: input.image,
@@ -1368,7 +1624,7 @@ async function runToolAction(
       tool_id: tool.id,
     },
   });
-  return { result: nextResult, target };
+  return { result: nextResult, target, actionTarget: input.target };
 }
 
 function pluginActionTargetKey(target: CanvasSelectionTarget | null): string {
@@ -1377,6 +1633,11 @@ function pluginActionTargetKey(target: CanvasSelectionTarget | null): string {
   }
   if (target.kind === "reference") {
     return `${target.kind}:${target.id}`;
+  }
+  if (target.kind === "canvas") {
+    return target.point
+      ? `${target.kind}:${Math.round(target.point.x)}:${Math.round(target.point.y)}`
+      : target.kind;
   }
   return target.kind;
 }
@@ -1438,6 +1699,7 @@ function GenerationWorkflowSection({
   onControlGuideEnabledChange: (enabled: boolean) => void;
   fixedExpandAvailable: boolean;
 }) {
+  const { t } = useI18n();
   const expandImageActive = workspaceMode === WORKSPACE_MODE_EXPAND_IMAGE;
   const directionalActive =
     generationMode === GENERATION_MODE_OUTPAINT &&
@@ -1446,12 +1708,20 @@ function GenerationWorkflowSection({
     expandImageActive || directionalActive || hfSpaceFillActive || !controlGuideAvailable;
   const guideEnabled = controlGuideEnabled && !guideDisabled;
   const guideDescription = guideDisabled
-    ? "Guide input is already handled by the active mode."
-    : "Optional sketch input that steers the generated area without switching tools.";
+    ? t("inspector.guideHandledByMode", {}, "Guide input is already handled by the active mode.")
+    : t(
+        "inspector.optionalSketchInput",
+        {},
+        "Optional sketch input that steers the generated area without switching tools.",
+      );
   return (
     <section className="panel-section generation-workflow-section">
       <div className="section-heading">
-        <span>{expandImageActive ? "Expansion mode" : "Active tool"}</span>
+        <span>
+          {expandImageActive
+            ? t("inspector.expandImage")
+            : t("inspector.editMode")}
+        </span>
       </div>
       {generationMode === GENERATION_MODE_OUTPAINT ? (
         <OutpaintMethodSwitch
@@ -1462,32 +1732,40 @@ function GenerationWorkflowSection({
       ) : null}
       {expandImageActive ? (
         <div className="expand-image-controls">
-          <div className="expand-direction-grid" aria-label="Expansion direction">
-            {OUTPAINT_DIRECTION_OPTIONS.map((option) => (
-              <button
-                key={option.id}
-                type="button"
-                className={
-                  parameters.outpaint_direction === option.id
-                    ? "expand-direction-option expand-direction-option-active"
-                    : "expand-direction-option"
-                }
-                aria-pressed={parameters.outpaint_direction === option.id}
-                onClick={() =>
-                  onParameterChange(
-                    "outpaint_direction",
-                    option.id as GenerationParameters["outpaint_direction"],
-                  )
-                }
-              >
-                {option.label}
-              </button>
-            ))}
+          <div
+            className="expand-direction-grid"
+            aria-label={t("inspector.direction")}
+          >
+            {OUTPAINT_DIRECTION_OPTIONS.map((option) => {
+              const direction = option.id as GenerationParameters["outpaint_direction"];
+              const DirectionIcon = EXPAND_DIRECTION_ICONS[direction];
+              const label = t(`metadata.options.${option.id}`, {}, option.label);
+              return (
+                <button
+                  key={option.id}
+                  type="button"
+                  className={
+                    parameters.outpaint_direction === option.id
+                      ? "expand-direction-option expand-direction-option-active"
+                      : "expand-direction-option"
+                  }
+                  aria-label={label}
+                  aria-pressed={parameters.outpaint_direction === option.id}
+                  title={label}
+                  onClick={() =>
+                    onParameterChange("outpaint_direction", direction)
+                  }
+                >
+                  <DirectionIcon size={16} aria-hidden="true" />
+                  <span className="sr-only">{label}</span>
+                </button>
+              );
+            })}
           </div>
           {parameters.outpaint_direction === "around" ? (
             <div className="expand-size-grid">
               <SliderField
-                label="Width growth"
+                label={t("inspector.widthPercent")}
                 value={parameters.fixed_expand_width_percent}
                 min={5}
                 max={200}
@@ -1498,7 +1776,7 @@ function GenerationWorkflowSection({
                 }
               />
               <SliderField
-                label="Height growth"
+                label={t("inspector.heightPercent")}
                 value={parameters.fixed_expand_height_percent}
                 min={5}
                 max={200}
@@ -1511,7 +1789,7 @@ function GenerationWorkflowSection({
             </div>
           ) : (
             <SliderField
-              label="New area"
+              label={t("inspector.expandAmount")}
               value={parameters.fixed_expand_percent}
               min={5}
               max={200}
@@ -1522,45 +1800,116 @@ function GenerationWorkflowSection({
               }
             />
           )}
-          <SliderField
-            label="Overlap"
-            value={parameters.hf_space_overlap_percentage}
-            min={1}
-            max={50}
-            step={1}
-            valueSuffix="%"
-            onChange={(value) =>
-              onParameterChange("hf_space_overlap_percentage", value)
-            }
-          />
+          <div className="fixed-expand-overlap-field">
+            <div className="fixed-expand-group-heading">
+              <span>{t("inspector.overlap")}</span>
+              <OverlapToggle
+                label={
+                  parameters.fixed_expand_show_guides
+                    ? t("inspector.hideOverlapPreview")
+                    : t("inspector.showOverlapPreview")
+                }
+                checked={parameters.fixed_expand_show_guides}
+                icon={parameters.fixed_expand_show_guides ? Eye : EyeOff}
+                onChange={(value) =>
+                  onParameterChange("fixed_expand_show_guides", value)
+                }
+              />
+            </div>
+            <p className="control-help-text">
+              {t("inspector.overlapDescription")}
+            </p>
+            <SliderField
+              label={t("inspector.overlapAmount")}
+              value={parameters.hf_space_overlap_percentage}
+              min={1}
+              max={50}
+              step={1}
+              valueSuffix="%"
+              onChange={(value) =>
+                onParameterChange("hf_space_overlap_percentage", value)
+              }
+            />
+            <div className="fixed-expand-overlap-sides">
+              <span>{t("inspector.overlapSides")}</span>
+              <div className="expand-overlap-grid" aria-label={t("inspector.overlapSides")}>
+                <OverlapToggle
+                  label={t("metadata.options.left")}
+                  checked={parameters.hf_space_overlap_left}
+                  icon={OVERLAP_SIDE_ICONS.left}
+                  onChange={(value) =>
+                    onParameterChange("hf_space_overlap_left", value)
+                  }
+                />
+                <OverlapToggle
+                  label={t("metadata.options.right")}
+                  checked={parameters.hf_space_overlap_right}
+                  icon={OVERLAP_SIDE_ICONS.right}
+                  onChange={(value) =>
+                    onParameterChange("hf_space_overlap_right", value)
+                  }
+                />
+                <OverlapToggle
+                  label={t("inspector.top")}
+                  checked={parameters.hf_space_overlap_top}
+                  icon={OVERLAP_SIDE_ICONS.top}
+                  onChange={(value) =>
+                    onParameterChange("hf_space_overlap_top", value)
+                  }
+                />
+                <OverlapToggle
+                  label={t("metadata.options.down")}
+                  checked={parameters.hf_space_overlap_bottom}
+                  icon={OVERLAP_SIDE_ICONS.bottom}
+                  onChange={(value) =>
+                    onParameterChange("hf_space_overlap_bottom", value)
+                  }
+                />
+              </div>
+            </div>
+          </div>
           <div className="render-scale-field">
-            <div className="label-row">
-              <span>Render scale</span>
+            <div className="fixed-expand-group-heading">
+              <span>{t("inspector.renderScale")}</span>
               <strong>{fixedExpandScaleLabel(parameters)}</strong>
             </div>
-            <div className="render-scale-grid" aria-label="Render scale">
-              {FIXED_EXPAND_RENDER_SCALE_OPTIONS.map((option) => (
-                <button
-                  key={option.id}
-                  type="button"
-                  className={
-                    parameters.fixed_expand_output_scale === option.id
-                      ? "workflow-option workflow-option-active"
-                      : "workflow-option"
-                  }
-                  aria-pressed={parameters.fixed_expand_output_scale === option.id}
-                  onClick={() =>
-                    onParameterChange("fixed_expand_output_scale", option.id)
-                  }
-                >
-                  {option.label}
-                </button>
-              ))}
+            <div className="render-scale-grid" aria-label={t("inspector.renderScale")}>
+              {FIXED_EXPAND_RENDER_SCALE_OPTIONS.map((option) => {
+                const ScaleIcon = RENDER_SCALE_ICONS[option.id];
+                const label = t(`metadata.options.${option.id}`, {}, option.label);
+                const reference = fixedExpandScaleOptionReference(
+                  option.id,
+                  parameters,
+                );
+                return (
+                  <button
+                    key={option.id}
+                    type="button"
+                    className={
+                      parameters.fixed_expand_output_scale === option.id
+                        ? "workflow-option workflow-option-active workflow-icon-option"
+                        : "workflow-option workflow-icon-option"
+                    }
+                    aria-label={`${label} ${reference}`}
+                    aria-pressed={parameters.fixed_expand_output_scale === option.id}
+                    title={`${label} ${reference}`}
+                    onClick={() =>
+                      onParameterChange("fixed_expand_output_scale", option.id)
+                    }
+                  >
+                    <ScaleIcon size={16} aria-hidden="true" />
+                    <span className="workflow-icon-option-copy">
+                      <span>{label}</span>
+                      <small>{reference}</small>
+                    </span>
+                  </button>
+                );
+              })}
             </div>
           </div>
           {parameters.fixed_expand_output_scale === "custom" ? (
             <SliderField
-              label="Custom scale"
+              label={t("inspector.customScale")}
               value={parameters.fixed_expand_custom_output_scale}
               min={25}
               max={100}
@@ -1571,54 +1920,14 @@ function GenerationWorkflowSection({
               }
             />
           ) : null}
-          <div className="fixed-expand-toggle-row">
-            <span>Preview guides</span>
-            <OverlapToggle
-              label={parameters.fixed_expand_show_guides ? "On" : "Off"}
-              checked={parameters.fixed_expand_show_guides}
-              onChange={(value) =>
-                onParameterChange("fixed_expand_show_guides", value)
-              }
-            />
-          </div>
-          <div className="expand-overlap-grid" aria-label="Overlap sides">
-            <OverlapToggle
-              label="Left"
-              checked={parameters.hf_space_overlap_left}
-              onChange={(value) =>
-                onParameterChange("hf_space_overlap_left", value)
-              }
-            />
-            <OverlapToggle
-              label="Right"
-              checked={parameters.hf_space_overlap_right}
-              onChange={(value) =>
-                onParameterChange("hf_space_overlap_right", value)
-              }
-            />
-            <OverlapToggle
-              label="Top"
-              checked={parameters.hf_space_overlap_top}
-              onChange={(value) =>
-                onParameterChange("hf_space_overlap_top", value)
-              }
-            />
-            <OverlapToggle
-              label="Bottom"
-              checked={parameters.hf_space_overlap_bottom}
-              onChange={(value) =>
-                onParameterChange("hf_space_overlap_bottom", value)
-              }
-            />
-          </div>
         </div>
       ) : generationMode === GENERATION_MODE_OUTPAINT ? (
         <>
           {fixedExpandAvailable && !directionalActive ? (
             <SliderField
-              label="Overlap"
-              value={Math.max(parameters.hf_space_overlap_percentage, 20)}
-              min={20}
+              label={t("inspector.overlap")}
+              value={parameters.hf_space_overlap_percentage}
+              min={1}
               max={50}
               step={1}
               valueSuffix="%"
@@ -1629,20 +1938,26 @@ function GenerationWorkflowSection({
           ) : null}
           {!hfSpaceFillActive ? (
             <SelectControl
-              label="Frame context"
+              label={t("inspector.frameContext")}
               value={outpaintStrategy}
-              options={FREE_EDIT_OUTPAINT_STRATEGY_OPTIONS}
-              optionDetails={controlOptionDetailsFor("outpaint_strategy")}
+              options={FREE_EDIT_OUTPAINT_STRATEGY_OPTIONS.map((option) => ({
+                ...option,
+                label: t(`metadata.options.${option.id}`, {}, option.label),
+              }))}
+              optionDetails={controlOptionDetailsFor("outpaint_strategy", t)}
               onChange={(value) => onOutpaintStrategyChange(value as OutpaintStrategy)}
             />
           ) : null}
           {directionalActive ? (
             <div className="directional-outpaint-controls">
               <SelectControl
-                label="Direction"
+                label={t("inspector.direction")}
                 value={parameters.outpaint_direction}
-                options={OUTPAINT_DIRECTION_OPTIONS}
-                optionDetails={controlOptionDetailsFor("outpaint_direction")}
+                options={OUTPAINT_DIRECTION_OPTIONS.map((option) => ({
+                  ...option,
+                  label: t(`metadata.options.${option.id}`, {}, option.label),
+                }))}
+                optionDetails={controlOptionDetailsFor("outpaint_direction", t)}
                 onChange={(value) =>
                   onParameterChange(
                     "outpaint_direction",
@@ -1651,7 +1966,7 @@ function GenerationWorkflowSection({
                 }
               />
               <label className="field-label">
-                Generated size
+                {t("inspector.generatedSize")}
                 <input
                   type="number"
                   min={DIRECTIONAL_OUTPAINT_MIN_SIZE}
@@ -1665,11 +1980,11 @@ function GenerationWorkflowSection({
                   }
                 />
                 <span className="control-help-text">
-                  Pixels generated along the chosen direction.
+                  {t("inspector.generatedSizeHelp")}
                 </span>
               </label>
               <label className="field-label">
-                Context
+                {t("inspector.context")}
                 <input
                   type="number"
                   min={1}
@@ -1683,11 +1998,11 @@ function GenerationWorkflowSection({
                   }
                 />
                 <span className="control-help-text">
-                  Existing pixels included so the new area matches the image.
+                  {t("inspector.contextHelp")}
                 </span>
               </label>
               <label className="field-label">
-                Cross axis
+                {t("inspector.crossAxis")}
                 <input
                   type="number"
                   min={DIRECTIONAL_OUTPAINT_MIN_SIZE}
@@ -1701,7 +2016,7 @@ function GenerationWorkflowSection({
                   }
                 />
                 <span className="control-help-text">
-                  Size across the direction, such as height for left or right.
+                  {t("inspector.crossAxisHelp")}
                 </span>
               </label>
             </div>
@@ -1711,10 +2026,10 @@ function GenerationWorkflowSection({
       {workspaceMode === WORKSPACE_MODE_FREE_EDIT && controlGuideAvailable ? (
         <>
           <div className="section-heading">
-            <span>Guide</span>
+            <span>{t("inspector.guide")}</span>
           </div>
           <p className="control-help-text">{guideDescription}</p>
-          <div className="workflow-segmented-control" aria-label="Sketch guide">
+          <div className="workflow-segmented-control" aria-label={t("toolbar.sketchGuide")}>
             <button
               type="button"
               className={
@@ -1726,7 +2041,7 @@ function GenerationWorkflowSection({
               onClick={() => onControlGuideEnabledChange(false)}
             >
               <MousePointer2 size={15} />
-              None
+              {t("common.none")}
             </button>
             <button
               type="button"
@@ -1752,10 +2067,12 @@ function GenerationWorkflowSection({
 function OverlapToggle({
   label,
   checked,
+  icon: Icon,
   onChange,
 }: {
   label: string;
   checked: boolean;
+  icon?: LucideIcon;
   onChange: (checked: boolean) => void;
 }) {
   return (
@@ -1766,10 +2083,19 @@ function OverlapToggle({
           ? "expand-overlap-toggle expand-overlap-toggle-active"
           : "expand-overlap-toggle"
       }
+      aria-label={label}
       aria-pressed={checked}
+      title={label}
       onClick={() => onChange(!checked)}
     >
-      {label}
+      {Icon ? (
+        <>
+          <Icon size={15} aria-hidden="true" />
+          <span className="sr-only">{label}</span>
+        </>
+      ) : (
+        label
+      )}
     </button>
   );
 }
@@ -1782,6 +2108,22 @@ function fixedExpandScaleLabel(parameters: GenerationParameters): string {
     return "75%";
   }
   if (parameters.fixed_expand_output_scale === "custom") {
+    return `${parameters.fixed_expand_custom_output_scale}%`;
+  }
+  return "100%";
+}
+
+function fixedExpandScaleOptionReference(
+  optionId: (typeof FIXED_EXPAND_RENDER_SCALE_OPTIONS)[number]["id"],
+  parameters: GenerationParameters,
+): string {
+  if (optionId === "safe") {
+    return "60%";
+  }
+  if (optionId === "balanced") {
+    return "75%";
+  }
+  if (optionId === "custom") {
     return `${parameters.fixed_expand_custom_output_scale}%`;
   }
   return "100%";
@@ -1811,12 +2153,14 @@ function ToolContextSections({
   viewport,
   brushSize,
   eraserHardness,
+  eraserMode,
   controlGuideColor,
   controlGuideStrength,
   controlGuideMaskMode,
   onSelectionChange,
   onBrushSizeChange,
   onEraserHardnessChange,
+  onEraserModeChange,
   onControlGuideColorChange,
   onControlGuideStrengthChange,
   onControlGuideMaskModeChange,
@@ -1830,18 +2174,21 @@ function ToolContextSections({
   viewport: ViewportState;
   brushSize: number;
   eraserHardness: number;
+  eraserMode: EraserMode;
   controlGuideColor: string;
   controlGuideStrength: number;
   controlGuideMaskMode: ControlGuideMaskMode;
   onSelectionChange: (selection: SelectionRect) => void;
   onBrushSizeChange: (value: number) => void;
   onEraserHardnessChange: (value: number) => void;
+  onEraserModeChange: (value: EraserMode) => void;
   onControlGuideColorChange: (value: string) => void;
   onControlGuideStrengthChange: (value: number) => void;
   onControlGuideMaskModeChange: (value: ControlGuideMaskMode) => void;
   onClearMask: () => void;
   onClearControlGuide: () => void;
 }) {
+  const { t } = useI18n();
   if (!CONTROLNET_GUIDE_UI_ENABLED && tool === TOOL_CONTROL_GUIDE) {
     return null;
   }
@@ -1850,7 +2197,7 @@ function ToolContextSections({
     return (
       <section className="tool-control-section">
         <SliderField
-          label="Brush size"
+          label={t("inspector.brushSize")}
           value={brushSize}
           min={MIN_BRUSH_SIZE}
           max={MAX_BRUSH_SIZE}
@@ -1862,7 +2209,7 @@ function ToolContextSections({
           onChange={onControlGuideColorChange}
         />
         <SliderField
-          label="Stroke strength"
+          label={t("inspector.strokeStrength")}
           value={controlGuideStrength}
           min={MIN_CONTROL_GUIDE_STRENGTH}
           max={MAX_CONTROL_GUIDE_STRENGTH}
@@ -1878,7 +2225,7 @@ function ToolContextSections({
         ) : null}
         <Button type="button" variant="secondary" onClick={onClearControlGuide}>
           <Trash2 size={15} />
-          Clear guide
+          {t("inspector.clearGuide")}
         </Button>
       </section>
     );
@@ -1888,7 +2235,7 @@ function ToolContextSections({
     return (
       <section className="tool-control-section">
         <SliderField
-          label="Brush size"
+          label={t("inspector.brushSize")}
           value={brushSize}
           min={MIN_BRUSH_SIZE}
           max={MAX_BRUSH_SIZE}
@@ -1897,7 +2244,7 @@ function ToolContextSections({
         />
         <Button type="button" variant="secondary" onClick={onClearMask}>
           <Trash2 size={15} />
-          Clear mask
+          {t("inspector.clearMask")}
         </Button>
       </section>
     );
@@ -1906,23 +2253,35 @@ function ToolContextSections({
   if (tool === TOOL_ERASE) {
     return (
       <section className="tool-control-section">
-        <SliderField
-          label="Brush size"
-          value={brushSize}
-          min={MIN_BRUSH_SIZE}
-          max={MAX_BRUSH_SIZE}
-          step={1}
-          onChange={onBrushSizeChange}
-        />
-        <SliderField
-          label="Hardness"
-          value={eraserHardness}
-          min={MIN_ERASER_HARDNESS}
-          max={MAX_ERASER_HARDNESS}
-          step={1}
-          valueSuffix="%"
-          onChange={onEraserHardnessChange}
-        />
+        <EraserModeField value={eraserMode} onChange={onEraserModeChange} />
+        {eraserMode === ERASER_MODE_BRUSH ? (
+          <>
+            <SliderField
+              label={t("inspector.brushSize")}
+              value={brushSize}
+              min={MIN_BRUSH_SIZE}
+              max={MAX_BRUSH_SIZE}
+              step={1}
+              onChange={onBrushSizeChange}
+            />
+            <SliderField
+              label={t("inspector.hardness")}
+              value={eraserHardness}
+              min={MIN_ERASER_HARDNESS}
+              max={MAX_ERASER_HARDNESS}
+              step={1}
+              valueSuffix="%"
+              onChange={onEraserHardnessChange}
+            />
+          </>
+        ) : (
+          <SelectionSection
+            documentState={documentState}
+            title={t("inspector.eraseArea")}
+            icon={Square}
+            onSelectionChange={onSelectionChange}
+          />
+        )}
       </section>
     );
   }
@@ -1934,7 +2293,7 @@ function ToolContextSections({
           <ToolMetric label="X" value={String(Math.round(viewport.x))} />
           <ToolMetric label="Y" value={String(Math.round(viewport.y))} />
           <ToolMetric
-            label="Zoom"
+            label={t("inspector.zoom")}
             value={`${Math.round(viewport.zoom * 100)}%`}
           />
         </div>
@@ -1970,10 +2329,11 @@ function ToolContextSections({
 }
 
 function SelectSection() {
+  const { t } = useI18n();
   return (
     <section className="tool-selection-context">
-      <strong>Select</strong>
-      <span>Choose an image or the outpaint frame on the canvas.</span>
+      <strong>{t("toolbar.select")}</strong>
+      <span>{t("inspector.selectHelp")}</span>
     </section>
   );
 }
@@ -1983,10 +2343,17 @@ function ImageSelectionSection({
 }: {
   selection: { label: string; bounds: DocumentBounds };
 }) {
+  const { t } = useI18n();
+  const label =
+    selection.label === "Base image"
+      ? t("inspector.baseImage")
+      : selection.label === "Reference image"
+        ? t("inspector.referenceImage")
+        : selection.label;
   return (
     <section className="tool-selection-context">
       <div className="selection-context-heading">
-        <strong>{selection.label}</strong>
+        <strong>{label}</strong>
         <span>
           {Math.round(selection.bounds.width)} x{" "}
           {Math.round(selection.bounds.height)}
@@ -1996,11 +2363,11 @@ function ImageSelectionSection({
         <ToolMetric label="X" value={String(Math.round(selection.bounds.x))} />
         <ToolMetric label="Y" value={String(Math.round(selection.bounds.y))} />
         <ToolMetric
-          label="Width"
+          label={t("inspector.width")}
           value={String(Math.round(selection.bounds.width))}
         />
         <ToolMetric
-          label="Height"
+          label={t("inspector.height")}
           value={String(Math.round(selection.bounds.height))}
         />
       </div>
@@ -2045,13 +2412,18 @@ function getSelectedImageContext(
 
 function SelectionSection({
   documentState,
+  title,
+  icon: Icon = Frame,
   onSelectionChange,
 }: {
   documentState: EditorDocument;
+  title?: string;
+  icon?: LucideIcon;
   onSelectionChange: (selection: SelectionRect) => void;
 }) {
   const [open, setOpen] = useState(true);
   const CountIcon = open ? ChevronDown : ChevronRight;
+  const { t } = useI18n();
 
   return (
     <section
@@ -2068,8 +2440,8 @@ function SelectionSection({
         onClick={() => setOpen((current) => !current)}
       >
         <span className="generation-section-title">
-          <Frame size={16} />
-          <span>Frame</span>
+          <Icon size={16} />
+          <span>{title ?? t("inspector.frame")}</span>
         </span>
         <span className="generation-section-meta">
           <span>
@@ -2082,7 +2454,7 @@ function SelectionSection({
         <div className="generation-section-body">
           <div className="field-grid">
             <NumericField
-              label="Width"
+              label={t("inspector.width")}
               value={documentState.selection.width}
               min={1}
               max={4096}
@@ -2091,7 +2463,7 @@ function SelectionSection({
               }
             />
             <NumericField
-              label="Height"
+              label={t("inspector.height")}
               value={documentState.selection.height}
               min={1}
               max={4096}
@@ -2102,7 +2474,7 @@ function SelectionSection({
           </div>
           <div className="field-grid">
             <NumericField
-              label="Left"
+              label={t("inspector.left")}
               value={documentState.selection.x}
               min={-16384}
               max={16384}
@@ -2111,7 +2483,7 @@ function SelectionSection({
               }
             />
             <NumericField
-              label="Top"
+              label={t("inspector.top")}
               value={documentState.selection.y}
               min={-16384}
               max={16384}
@@ -2162,6 +2534,49 @@ function NumericField({
   );
 }
 
+function EraserModeField({
+  value,
+  onChange,
+}: {
+  value: EraserMode;
+  onChange: (value: EraserMode) => void;
+}) {
+  const { t } = useI18n();
+  return (
+    <div className="field-label">
+      <span>{t("inspector.eraserMode")}</span>
+      <div className="workflow-segmented-control" aria-label={t("inspector.eraserMode")}>
+        <button
+          type="button"
+          className={
+            value === ERASER_MODE_BRUSH
+              ? "workflow-option workflow-option-active"
+              : "workflow-option"
+          }
+          aria-pressed={value === ERASER_MODE_BRUSH}
+          onClick={() => onChange(ERASER_MODE_BRUSH)}
+        >
+          <Eraser size={15} />
+          {t("inspector.brushErase")}
+        </button>
+        <button
+          type="button"
+          className={
+            value === ERASER_MODE_RECTANGLE
+              ? "workflow-option workflow-option-active"
+              : "workflow-option"
+          }
+          aria-pressed={value === ERASER_MODE_RECTANGLE}
+          onClick={() => onChange(ERASER_MODE_RECTANGLE)}
+        >
+          <Square size={15} />
+          {t("inspector.rectangleErase")}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function ControlGuideColorPicker({
   value,
   onChange,
@@ -2169,18 +2584,22 @@ function ControlGuideColorPicker({
   value: string;
   onChange: (value: string) => void;
 }) {
+  const { t } = useI18n();
   return (
     <div className="control-guide-color-field">
       <div className="label-row">
-        <span>Color</span>
+        <span>{t("inspector.color")}</span>
         <input
           type="color"
           value={value}
-          aria-label="Control guide color"
+          aria-label={t("inspector.controlGuideColor")}
           onChange={(event) => onChange(event.target.value)}
         />
       </div>
-      <div className="control-guide-swatches" aria-label="Control guide swatches">
+      <div
+        className="control-guide-swatches"
+        aria-label={t("inspector.controlGuideSwatches")}
+      >
         {CONTROL_GUIDE_COLORS.map((color) => (
           <button
             key={color}
@@ -2191,7 +2610,7 @@ function ControlGuideColorPicker({
                 : "control-guide-swatch"
             }
             style={{ backgroundColor: color }}
-            aria-label={`Use ${color}`}
+            aria-label={t("inspector.useColor", { color })}
             onClick={() => onChange(color)}
           />
         ))}
@@ -2207,9 +2626,10 @@ function ControlGuideMaskModeField({
   value: ControlGuideMaskMode;
   onChange: (value: ControlGuideMaskMode) => void;
 }) {
+  const { t } = useI18n();
   return (
     <label className="field-label">
-      <span>Masked area guide</span>
+      <span>{t("inspector.maskedAreaGuide")}</span>
       <select
         value={value}
         onChange={(event) =>
@@ -2218,7 +2638,7 @@ function ControlGuideMaskModeField({
       >
         {CONTROL_GUIDE_MASK_MODE_OPTIONS.map((option) => (
           <option key={option.id} value={option.id}>
-            {option.label}
+            {t(`metadata.options.${option.id}`, {}, option.label)}
           </option>
         ))}
       </select>
@@ -2275,6 +2695,7 @@ function formatSliderValue(value: number, step: number): string {
 function getToolContext(
   tool: EditorTool,
   activePluginTool: PluginToolInfo | null,
+  t: TranslateFunction,
 ): ToolContext {
   if (activePluginTool) {
     return {
@@ -2284,42 +2705,42 @@ function getToolContext(
   }
   if (tool === TOOL_ERASE) {
     return {
-      title: "Pixel eraser",
+      title: t("toolbar.erasePixels"),
       icon: Eraser,
     };
   }
   if (tool === TOOL_PAN) {
     return {
-      title: "Pan",
+      title: t("toolbar.pan"),
       icon: Hand,
     };
   }
   if (tool === TOOL_INPAINT_MASK) {
     return {
-      title: "Inpaint mask",
+      title: t("toolbar.inpaintMask"),
       icon: Paintbrush,
     };
   }
   if (tool === TOOL_CONTROL_GUIDE) {
     return {
-      title: "Control guide",
+      title: t("toolbar.sketchGuide"),
       icon: Palette,
     };
   }
   if (tool === TOOL_OUTPAINT_FRAME) {
     return {
-      title: "Outpaint",
+      title: t("toolbar.outpaintFrame"),
       icon: Frame,
     };
   }
   if (tool === TOOL_SELECT) {
     return {
-      title: "Select",
+      title: t("toolbar.select"),
       icon: MousePointer2,
     };
   }
   return {
-    title: "Tool",
+    title: t("inspector.editMode"),
     icon: MousePointer2,
   };
 }
@@ -2333,6 +2754,9 @@ function pluginToolContextIcon(icon: string): LucideIcon {
   }
   if (icon === "sliders-horizontal") {
     return SlidersHorizontal;
+  }
+  if (icon === "wand-sparkles") {
+    return WandSparkles;
   }
   return TextSearch;
 }
