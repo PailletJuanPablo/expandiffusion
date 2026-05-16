@@ -1,0 +1,6 @@
+{
+  "id": "correction-color-match",
+  "label": "Color Match Correction",
+  "version": "0.1.0",
+  "description": "LAB color transfer from preserved boundary pixels to generated pixels."
+}

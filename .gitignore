@@ -1,0 +1,72 @@
+# Local environment
+.env
+.env.*
+!.env.example
+!apps/**/.env.example
+*.local
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Dependencies and builds
+node_modules/
+/apps/web/node_modules/
+/apps/web/dist/
+/apps/web/test-results/
+dist/
+dist-ssr/
+
+# Python runtime artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.ruff_cache/
+/apps/api/.venv/
+/apps/api/.pytest_cache/
+/apps/api/.ruff_cache/
+/apps/api/expandiffusion.egg-info/
+
+# Local application state, outputs, and test artifacts
+/data/
+/apps/api/data/
+/apps/api/test-artifacts/
+/errors/
+/v380-report/
+/.lh/
+/*.png
+/*.jpg
+/*.jpeg
+/*.webp
+
+# Local model and ML assets
+/models/
+/gfpgan/
+/apps/api/gfpgan/
+*.safetensors
+*.ckpt
+*.pt
+*.pth
+*.onnx
+*.bin
+*.gguf
+*.parquet
+*.arrow
+*.feather
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?

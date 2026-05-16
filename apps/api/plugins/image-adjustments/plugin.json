@@ -1,0 +1,6 @@
+{
+  "id": "image-adjustments",
+  "label": "Image Adjustments",
+  "version": "0.1.0",
+  "description": "Color and tone adjustments for uploaded images."
+}

@@ -1,0 +1,6 @@
+{
+  "id": "sdxl-seam-refine",
+  "label": "SDXL Seam Refine",
+  "version": "0.1.0",
+  "description": "Post-compose SDXL inpaint pass with IP-Adapter Plus for visible outpaint seams."
+}

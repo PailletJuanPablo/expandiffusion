@@ -1,0 +1,17 @@
+{
+  "name": "expandiffusion-workspace",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "node scripts/dev.mjs all",
+    "dev:api": "node scripts/dev.mjs api",
+    "dev:web": "node scripts/dev.mjs web",
+    "dev:check": "node scripts/dev.mjs check",
+    "build:web": "npm --prefix apps/web run build",
+    "lint:web": "npm --prefix apps/web run lint",
+    "test:web": "npm --prefix apps/web run test:frontend",
+    "test:e2e:live": "npm --prefix apps/web run test:e2e:live",
+    "test:api": "cd apps/api && .\\.venv\\Scripts\\python.exe -m pytest"
+  }
+}

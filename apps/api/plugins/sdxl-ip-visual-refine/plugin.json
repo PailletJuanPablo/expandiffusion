@@ -1,0 +1,6 @@
+{
+  "id": "sdxl-ip-visual-refine",
+  "label": "SDXL IP Visual Refine",
+  "version": "0.1.0",
+  "description": "HF Space SDXL outpaint followed by an optional IP-Adapter visual refine pass."
+}

@@ -1,0 +1,6 @@
+{
+  "id": "art-face-repair",
+  "label": "Art Face Repair",
+  "version": "0.1.0",
+  "description": "Florence-2 guided local repaint for malformed faces in paintings."
+}

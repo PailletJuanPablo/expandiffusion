@@ -1,0 +1,6 @@
+{
+  "id": "correction-mask-feather",
+  "label": "Mask Feather Correction",
+  "version": "0.1.0",
+  "description": "Soft mask-edge lighting correction for generated regions."
+}

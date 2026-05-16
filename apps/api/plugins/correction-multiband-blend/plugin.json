@@ -1,0 +1,6 @@
+{
+  "id": "correction-multiband-blend",
+  "label": "Multiband Blend Correction",
+  "version": "0.1.0",
+  "description": "Multiscale blending across the mask boundary."
+}

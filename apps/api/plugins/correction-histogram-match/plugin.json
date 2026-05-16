@@ -1,0 +1,6 @@
+{
+  "id": "correction-histogram-match",
+  "label": "Histogram Match Correction",
+  "version": "0.1.0",
+  "description": "Histogram matching between generated pixels and preserved boundary pixels."
+}

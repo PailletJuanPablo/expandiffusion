@@ -1,0 +1,6 @@
+{
+  "id": "gfpgan-face-restore",
+  "label": "GFPGAN Face Restore",
+  "version": "0.1.0",
+  "description": "Dedicated face restoration postprocessor for generated faces."
+}

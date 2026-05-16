@@ -1,0 +1,6 @@
+{
+  "id": "auto-detailer",
+  "label": "Auto Detailer",
+  "version": "0.1.0",
+  "description": "Optional second-pass inpaint refinement for faces and body regions."
+}

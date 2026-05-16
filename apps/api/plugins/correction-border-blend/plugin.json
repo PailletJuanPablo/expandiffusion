@@ -1,0 +1,6 @@
+{
+  "id": "correction-border-blend",
+  "label": "Border Blend Correction",
+  "version": "0.1.0",
+  "description": "Gradient-domain border blending for visible outpaint seams."
+}

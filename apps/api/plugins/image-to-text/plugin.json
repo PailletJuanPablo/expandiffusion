@@ -1,0 +1,6 @@
+{
+  "id": "image-to-text",
+  "label": "Image to Text",
+  "version": "0.1.0",
+  "description": "Describes the selected image block for prompt drafting."
+}
