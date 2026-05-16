@@ -79,10 +79,15 @@ $env:EXPANDIFFUSION_RUN_REAL_SD_TESTS="1"
 
 ## Google Colab
 
-Open `notebooks/expandiffusion_colab.ipynb` in Google Colab, set `REPO_URL`
-to this repository once it is hosted, and run the cells in order. The notebook
-installs backend and frontend dependencies, starts the API and Vite servers,
-checks `/api/health`, then prints a temporary Colab proxy URL for the web UI.
+Open the Colab notebook and run the cells in order:
+
+```text
+https://colab.research.google.com/github/PailletJuanPablo/expandiffusion/blob/main/notebooks/expandiffusion_colab.ipynb
+```
+
+The notebook installs backend and frontend dependencies, starts the API and Vite
+servers, checks `/api/health`, then prints a temporary Colab proxy URL for the
+web UI.
 
 That UI URL is valid only while the Colab notebook runtime is active. For gated
 Hugging Face models, add `HF_TOKEN` as a Colab secret before loading the model.
