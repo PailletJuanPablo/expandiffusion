@@ -2950,12 +2950,49 @@ textarea:focus {
 }
 
 @media (max-width: 1200px) {
+  body {
+    min-width: 0;
+  }
+
   .studio-root {
-    grid-template-columns: 60px minmax(680px, 1fr);
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .left-toolbar {
+    top: 66px;
+    left: 10px;
+    width: 50px;
+    height: min(560px, calc(100vh - 148px));
+    padding: 6px;
+  }
+
+  .left-toolbar .ui-button-icon,
+  .left-toolbar .icon-file-button {
+    width: 32px;
+    height: 32px;
+  }
+
+  .inspector-panel {
+    top: 64px;
+    right: 10px;
+    width: min(340px, calc(100vw - 86px));
+    height: calc(100vh - 132px);
+    max-height: calc(100vh - 132px);
+  }
+
+  .inspector-panel-contextual {
+    height: calc(100vh - 132px);
+    max-height: calc(100vh - 132px);
+  }
+
+  .studio-root-filmstrip-collapsed .inspector-panel,
+  .studio-root-filmstrip-collapsed .inspector-panel-contextual {
+    height: calc(100vh - 106px);
+    max-height: calc(100vh - 106px);
   }
 
   .result-controls-overlay {
-    left: 68px;
-    max-width: calc(100vw - 92px);
+    left: 62px;
+    max-width: calc(100vw - 84px);
   }
 }
