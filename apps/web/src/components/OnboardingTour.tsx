@@ -1,6 +1,6 @@
-import { Check, ChevronLeft, ChevronRight, Loader2, Sparkles, X } from 'lucide-react'
+import { Check, ChevronLeft, ChevronRight, ListChecks, Loader2, Sparkles, X } from 'lucide-react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
-import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import type { DocumentBounds, ModelLoadProgress, SelectionRect, ViewportState } from '../domain/types'
 import {
   ONBOARDING_ACTION_CHOOSE_IMAGE,
@@ -37,11 +37,22 @@ const TARGET_SELECTOR_SUFFIX = '"]'
 const SPOTLIGHT_PADDING = 10
 const SPOTLIGHT_RADIUS = 12
 const POPOVER_WIDTH = 340
+const POPOVER_WAITING_WIDTH = 420
 const POPOVER_GAP = 18
 const VIEWPORT_MARGIN = 18
+const POPOVER_ESTIMATED_HEIGHT = 280
+const POPOVER_WAITING_ESTIMATED_HEIGHT = 470
 const MODEL_READY_ADVANCE_DELAY_MS = 900
 const IMAGE_READY_ADVANCE_DELAY_MS = 520
 const MODEL_LOADING_MESSAGE_INTERVAL_MS = 4200
+const MODEL_LOADING_STAGES = Object.freeze([
+  { key: 'source', start: 0 },
+  { key: 'download', start: 3 },
+  { key: 'pipeline', start: 20 },
+  { key: 'device', start: 74 },
+  { key: 'extensions', start: 90 },
+  { key: 'ready', start: 98 },
+])
 const MODEL_LOADING_MESSAGES = Object.freeze([
   {
     title: 'Warming the model',
@@ -193,8 +204,8 @@ export function OnboardingTour({
   }, [open, prefersReducedMotion, refreshTargetRect, step.primaryAction])
 
   const popoverStyle = useMemo(
-    () => getPopoverStyle(targetRect),
-    [targetRect],
+    () => getPopoverStyle(targetRect, stepState.waiting),
+    [stepState.waiting, targetRect],
   )
   const spotlightStyle = useMemo(
     () => getSpotlightStyle(targetRect),
@@ -267,7 +278,7 @@ export function OnboardingTour({
           />
         ) : null}
         <motion.section
-          className="onboarding-popover"
+          className={`onboarding-popover${stepState.waiting ? ' onboarding-popover-waiting' : ''}`}
           role="dialog"
           aria-modal="false"
           aria-label={t('onboarding.dialogLabel')}
@@ -290,17 +301,19 @@ export function OnboardingTour({
               <X size={15} />
             </Button>
           </div>
-          <div className="onboarding-title-row">
-            <Sparkles size={18} />
-            <h2>{step.title}</h2>
+          <div className="onboarding-popover-main">
+            <div className="onboarding-title-row">
+              <Sparkles size={18} />
+              <h2>{step.title}</h2>
+            </div>
+            <p>{stepState.waiting ? step.waitingBody : step.body}</p>
+            <StepStatus
+              step={step}
+              stepState={stepState}
+              modelLoadProgress={modelLoadProgress}
+              percent={percent}
+            />
           </div>
-          <p>{stepState.waiting ? step.waitingBody : step.body}</p>
-          <StepStatus
-            step={step}
-            stepState={stepState}
-            modelLoadProgress={modelLoadProgress}
-            percent={percent}
-          />
           <div className="onboarding-progress-dots" aria-label={t('onboarding.tourProgress')}>
             {localizedSteps.map((item, index) => (
               <span
@@ -368,23 +381,14 @@ function StepStatus({
   percent: number
 }) {
   const { t } = useI18n()
+  const elapsedMs = useElapsedMilliseconds(step.id === ONBOARDING_STEP_LOAD_MODEL && stepState.waiting)
   if (step.id === ONBOARDING_STEP_LOAD_MODEL && stepState.waiting) {
     return (
-      <div className="onboarding-wait-block">
-        <div className="job-row">
-          <span>
-            {modelLoadProgress?.message
-              ? localizeJobMessage(modelLoadProgress.message, t)
-              : t('onboarding.preparingModel')}
-          </span>
-          <span>{percent}%</span>
-        </div>
-        <Progress value={percent} />
-        {modelLoadProgress?.file_name ? (
-          <span>{modelLoadProgress.file_name}</span>
-        ) : null}
-        <ModelLoadingLessons />
-      </div>
+      <ModelLoadWaitPanel
+        progress={modelLoadProgress}
+        percent={percent}
+        elapsedMs={elapsedMs}
+      />
     )
   }
   if (!stepState.complete) {
@@ -396,6 +400,116 @@ function StepStatus({
       {t('common.ready')}
     </div>
   )
+}
+
+function ModelLoadWaitPanel({
+  progress,
+  percent,
+  elapsedMs,
+}: {
+  progress: ModelLoadProgress | null
+  percent: number
+  elapsedMs: number
+}) {
+  const { t } = useI18n()
+  const message = progress?.message
+    ? localizeJobMessage(progress.message, t)
+    : t('onboarding.preparingModel')
+  const files = progress?.files_total
+    ? `${progress.files_done ?? 0}/${progress.files_total}`
+    : null
+  const fileBytes = progress?.file_bytes_total
+    ? `${formatBytes(progress.file_bytes_done ?? 0)} / ${formatBytes(progress.file_bytes_total)}`
+    : progress?.file_bytes_done
+      ? formatBytes(progress.file_bytes_done)
+      : null
+  const totalBytes = progress?.bytes_total
+    ? `${formatBytes(progress.bytes_done ?? 0)} / ${formatBytes(progress.bytes_total)}`
+    : null
+
+  return (
+    <div className="onboarding-wait-block">
+      <div className="onboarding-load-summary">
+        <div className="onboarding-load-metric">
+          <span>{t('onboarding.loading.currentStatus')}</span>
+          <strong title={message}>{message}</strong>
+        </div>
+        <div className="onboarding-load-metric">
+          <span>{t('onboarding.loading.elapsed')}</span>
+          <strong>{formatElapsedTime(elapsedMs)}</strong>
+        </div>
+      </div>
+      <div className="onboarding-load-progress-row">
+        <span>{t('onboarding.loading.progress')}</span>
+        <span>{percent}%</span>
+      </div>
+      <Progress value={percent} />
+      {files || progress?.file_name || totalBytes ? (
+        <div className="onboarding-load-details">
+          {files ? <span>{t('onboarding.loading.files')}: {files}</span> : null}
+          {progress?.file_name ? (
+            <span title={progress.file_name}>
+              {t('onboarding.loading.currentFile')}: {progress.file_name}
+              {fileBytes ? ` - ${fileBytes}` : ''}
+            </span>
+          ) : null}
+          {totalBytes ? <span>{t('onboarding.loading.totalDownload')}: {totalBytes}</span> : null}
+        </div>
+      ) : null}
+      <ModelLoadingStages percent={percent} />
+      <ModelLoadingLessons />
+    </div>
+  )
+}
+
+function ModelLoadingStages({ percent }: { percent: number }) {
+  const { t } = useI18n()
+  return (
+    <div className="onboarding-stage-list" aria-label={t('onboarding.loading.stages')}>
+      <div className="onboarding-stage-list-header">
+        <ListChecks size={14} />
+        <span>{t('onboarding.loading.stages')}</span>
+      </div>
+      {MODEL_LOADING_STAGES.map((stage, index) => {
+        const nextStage = MODEL_LOADING_STAGES[index + 1]
+        const complete = percent >= (nextStage?.start ?? 100)
+        const current = !complete && percent >= stage.start
+        return (
+          <div
+            key={stage.key}
+            className={`onboarding-stage-item${
+              complete
+                ? ' onboarding-stage-item-complete'
+                : current
+                  ? ' onboarding-stage-item-current'
+                  : ''
+            }`}
+          >
+            <span className="onboarding-stage-marker" />
+            <span>{t(`onboarding.loading.stage.${stage.key}`)}</span>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function useElapsedMilliseconds(active: boolean): number {
+  const startedAtRef = useRef<number | null>(null)
+  const [elapsedMs, setElapsedMs] = useState(0)
+
+  useEffect(() => {
+    if (!active) {
+      startedAtRef.current = null
+      return
+    }
+    const start = Date.now()
+    startedAtRef.current = start
+    const timer = window.setInterval(() => setElapsedMs(Date.now() - start), 1000)
+    return () => window.clearInterval(timer)
+  }, [active])
+
+  return active ? elapsedMs : 0
 }
 
 function activeTargetId(
@@ -537,6 +651,28 @@ function ModelLoadingLessons() {
   )
 }
 
+function formatElapsedTime(value: number): string {
+  const totalSeconds = Math.max(0, Math.floor(value / 1000))
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  if (minutes <= 0) {
+    return `${seconds}s`
+  }
+  return `${minutes}m ${seconds.toString().padStart(2, '0')}s`
+}
+
+function formatBytes(value: number): string {
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  let amount = value
+  for (const unit of units) {
+    if (amount < 1024 || unit === units[units.length - 1]) {
+      return unit === 'B' ? `${Math.round(amount)} B` : `${amount.toFixed(1)} ${unit}`
+    }
+    amount /= 1024
+  }
+  return `${amount.toFixed(1)} TB`
+}
+
 function loadingMessageKey(index: number): string {
   if (index === 1) {
     return 'context'
@@ -563,30 +699,37 @@ function getSpotlightStyle(targetRect: TourTargetRect | null): CSSProperties {
   }
 }
 
-function getPopoverStyle(targetRect: TourTargetRect | null): CSSProperties {
+function getPopoverStyle(targetRect: TourTargetRect | null, expanded = false): CSSProperties {
+  const viewportWidth = window.innerWidth
+  const viewportHeight = window.innerHeight
+  const availableWidth = Math.max(0, viewportWidth - VIEWPORT_MARGIN * 2)
+  const popoverWidth = Math.min(
+    expanded ? POPOVER_WAITING_WIDTH : POPOVER_WIDTH,
+    availableWidth,
+  )
   if (!targetRect) {
     return {
       top: '50%',
       left: '50%',
       transform: 'translate(-50%, -50%)',
+      width: popoverWidth,
     }
   }
-  const viewportWidth = window.innerWidth
-  const viewportHeight = window.innerHeight
   const rightSideLeft = targetRect.right + POPOVER_GAP
-  const leftSideLeft = targetRect.left - POPOVER_WIDTH - POPOVER_GAP
-  const centeredLeft = targetRect.left + targetRect.width / 2 - POPOVER_WIDTH / 2
+  const leftSideLeft = targetRect.left - popoverWidth - POPOVER_GAP
+  const centeredLeft = targetRect.left + targetRect.width / 2 - popoverWidth / 2
   const left =
-    rightSideLeft + POPOVER_WIDTH + VIEWPORT_MARGIN <= viewportWidth
+    rightSideLeft + popoverWidth + VIEWPORT_MARGIN <= viewportWidth
       ? rightSideLeft
       : leftSideLeft >= VIEWPORT_MARGIN
         ? leftSideLeft
-        : clamp(centeredLeft, VIEWPORT_MARGIN, viewportWidth - POPOVER_WIDTH - VIEWPORT_MARGIN)
-  const preferredTop = targetRect.top + targetRect.height / 2 - 120
+        : clamp(centeredLeft, VIEWPORT_MARGIN, viewportWidth - popoverWidth - VIEWPORT_MARGIN)
+  const estimatedHeight = expanded ? POPOVER_WAITING_ESTIMATED_HEIGHT : POPOVER_ESTIMATED_HEIGHT
+  const preferredTop = targetRect.top + targetRect.height / 2 - estimatedHeight / 2
   return {
-    top: clamp(preferredTop, VIEWPORT_MARGIN, viewportHeight - 280),
+    top: clamp(preferredTop, VIEWPORT_MARGIN, viewportHeight - estimatedHeight - VIEWPORT_MARGIN),
     left,
-    width: POPOVER_WIDTH,
+    width: popoverWidth,
   }
 }
 

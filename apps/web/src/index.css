@@ -2397,8 +2397,10 @@ textarea:focus {
 .onboarding-popover {
   position: fixed;
   display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
   gap: 13px;
   max-width: calc(100vw - 36px);
+  max-height: calc(100svh - 36px);
   padding: 16px;
   border: 1px solid rgba(186, 202, 220, 0.92);
   border-radius: var(--radius-panel);
@@ -2409,7 +2411,21 @@ textarea:focus {
   box-shadow:
     0 28px 90px rgba(15, 23, 42, 0.22),
     0 1px 0 rgba(255, 255, 255, 0.88) inset;
+  overflow: hidden;
   pointer-events: auto;
+}
+
+.onboarding-popover-waiting {
+  gap: 12px;
+}
+
+.onboarding-popover-main {
+  display: grid;
+  gap: 12px;
+  min-height: 0;
+  padding-right: 3px;
+  overflow: auto;
+  overscroll-behavior: contain;
 }
 
 .onboarding-popover-header,
@@ -2461,8 +2477,9 @@ textarea:focus {
 
 .onboarding-wait-block {
   display: grid;
-  gap: 7px;
-  padding: 9px;
+  gap: 10px;
+  min-width: 0;
+  padding: 11px;
   border: 1px solid rgba(18, 184, 200, 0.22);
   border-radius: var(--radius-control);
   color: var(--color-text-secondary);
@@ -2470,11 +2487,115 @@ textarea:focus {
   font-size: 11.5px;
 }
 
-.onboarding-wait-block > span {
-  overflow: hidden;
+.onboarding-load-summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(88px, 0.65fr);
+  gap: 8px;
+}
+
+.onboarding-load-metric {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid rgba(18, 184, 200, 0.18);
+  border-radius: var(--radius-control);
+  background: rgba(255, 255, 255, 0.62);
+}
+
+.onboarding-load-metric span,
+.onboarding-load-progress-row span:first-child,
+.onboarding-stage-list-header,
+.onboarding-load-details {
   color: var(--color-text-soft);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-size: 10.5px;
+  font-weight: 740;
+}
+
+.onboarding-load-metric strong {
+  min-width: 0;
+  color: var(--color-text-strong);
+  font-size: 12px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.onboarding-load-progress-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.onboarding-load-progress-row span:last-child {
+  color: var(--color-text-strong);
+  font-size: 11px;
+  font-weight: 820;
+}
+
+.onboarding-load-details {
+  display: grid;
+  gap: 4px;
+}
+
+.onboarding-load-details span {
+  min-width: 0;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.onboarding-stage-list {
+  display: grid;
+  gap: 6px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(18, 184, 200, 0.16);
+}
+
+.onboarding-stage-list-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--color-text-secondary);
+}
+
+.onboarding-stage-list-header svg {
+  color: var(--color-accent);
+}
+
+.onboarding-stage-item {
+  display: grid;
+  grid-template-columns: 13px minmax(0, 1fr);
+  gap: 7px;
+  align-items: start;
+  color: var(--color-text-soft);
+  font-size: 11.25px;
+  line-height: 1.25;
+}
+
+.onboarding-stage-marker {
+  width: 8px;
+  height: 8px;
+  margin-top: 3px;
+  border-radius: var(--radius-pill);
+  background: rgba(148, 163, 184, 0.34);
+}
+
+.onboarding-stage-item-complete {
+  color: var(--color-text-secondary);
+}
+
+.onboarding-stage-item-complete .onboarding-stage-marker {
+  background: var(--color-success);
+}
+
+.onboarding-stage-item-current {
+  color: var(--color-text-strong);
+  font-weight: 760;
+}
+
+.onboarding-stage-item-current .onboarding-stage-marker {
+  background: var(--color-accent);
+  box-shadow: 0 0 0 4px rgba(18, 184, 200, 0.14);
 }
 
 .onboarding-lesson-block {
@@ -2549,6 +2670,7 @@ textarea:focus {
 
 .onboarding-progress-dots {
   gap: 5px;
+  flex-wrap: wrap;
 }
 
 .onboarding-progress-dots span {
@@ -2564,18 +2686,71 @@ textarea:focus {
 }
 
 .onboarding-actions {
+  align-items: stretch;
   justify-content: space-between;
   gap: 8px;
 }
 
 .onboarding-actions .ui-button {
   min-width: 0;
+  height: auto;
+  min-height: 32px;
+  padding-top: 7px;
+  padding-bottom: 7px;
+  line-height: 1.15;
+  text-align: center;
+  white-space: normal;
 }
 
 @media (prefers-reduced-motion: reduce) {
   .onboarding-spotlight,
   .onboarding-popover {
     transition: none;
+  }
+}
+
+@media (max-width: 440px) {
+  .onboarding-popover {
+    gap: 10px;
+    max-height: calc(100svh - 24px);
+    padding: 14px;
+  }
+
+  .onboarding-title-row {
+    align-items: flex-start;
+  }
+
+  .onboarding-title-row h2 {
+    font-size: 17px;
+    line-height: 1.18;
+  }
+
+  .onboarding-load-summary {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .onboarding-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .onboarding-actions .ui-button:last-child {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-height: 620px) {
+  .onboarding-popover {
+    max-height: calc(100svh - 20px);
+  }
+
+  .onboarding-popover-main,
+  .onboarding-wait-block {
+    gap: 8px;
+  }
+
+  .onboarding-lesson-block {
+    padding: 7px;
   }
 }
 
