@@ -1722,9 +1722,9 @@ def test_object_selector_prompt_click_returns_visible_mask(tmp_path, monkeypatch
 
     records = {}
 
-    def fake_segment_mask(image, box, point):
+    def fake_segment_mask(image, box, points):
         records["box"] = box
-        records["point"] = point
+        records["points"] = points
         mask = Image.new("L", image.size, 0)
         mask.paste(255, box)
         return mask, 0.82
@@ -1747,7 +1747,7 @@ def test_object_selector_prompt_click_returns_visible_mask(tmp_path, monkeypatch
     )
 
     mask = decode_data_url(result.mask).convert("L")
-    assert records == {"box": (4, 1, 8, 6), "point": (6, 4)}
+    assert records == {"box": (4, 1, 8, 6), "points": [(6, 4)]}
     assert mask.size == (8, 8)
     assert mask.getpixel((4, 3)) == 0
     assert mask.getpixel((6, 3)) == 255
@@ -1755,14 +1755,64 @@ def test_object_selector_prompt_click_returns_visible_mask(tmp_path, monkeypatch
     assert result.data["source"] == "prompt_and_click"
 
 
+def test_object_selector_prompt_only_selects_all_detected_boxes(tmp_path, monkeypatch) -> None:
+    manager = _object_selector_manager(tmp_path)
+    module = sys.modules["expandiffusion_plugin_object_selector"]
+
+    monkeypatch.setattr(
+        module,
+        "_detect_prompt_boxes",
+        lambda _image, prompt: [
+            {"box": (0, 1, 3, 6), "label": prompt, "confidence": 0.4},
+            {"box": (4, 1, 8, 6), "label": prompt, "confidence": 0.9},
+        ],
+    )
+
+    records = []
+
+    def fake_segment_mask(image, box, points):
+        records.append({"box": box, "points": points})
+        mask = Image.new("L", image.size, 0)
+        mask.paste(255, box)
+        return mask, 0.82
+
+    monkeypatch.setattr(module, "_segment_mask", fake_segment_mask)
+
+    result = manager.run_action(
+        "object-selector",
+        PluginActionRunRequest(
+            image=_solid_data_url((8, 8), (10, 20, 30, 255)),
+            controls={"object_selector_prompt": "umbrella"},
+            target={
+                "kind": "canvas",
+                "bounds": {"x": 10, "y": 20, "width": 8, "height": 8},
+                "scale": 1,
+                "visible_mask": _mask_data_url((8, 8), (0, 0, 8, 8)),
+            },
+        ),
+    )
+
+    mask = decode_data_url(result.mask).convert("L")
+    assert records == [
+        {"box": (0, 1, 3, 6), "points": []},
+        {"box": (4, 1, 8, 6), "points": []},
+    ]
+    assert mask.getpixel((1, 3)) == 255
+    assert mask.getpixel((6, 3)) == 255
+    assert len(result.data["selections"]) == 2
+    assert result.data["selections"][0]["id"] == "object-1"
+    assert result.data["selections"][1]["id"] == "object-2"
+    assert result.data["source"] == "prompt"
+
+
 def test_object_selector_click_only_uses_point_prompt(tmp_path, monkeypatch) -> None:
     manager = _object_selector_manager(tmp_path)
     module = sys.modules["expandiffusion_plugin_object_selector"]
     records = {}
 
-    def fake_segment_mask(image, box, point):
+    def fake_segment_mask(image, box, points):
         records["box"] = box
-        records["point"] = point
+        records["points"] = points
         mask = Image.new("L", image.size, 0)
         mask.paste(255, (2, 2, 5, 5))
         return mask, 0.71
@@ -1783,9 +1833,41 @@ def test_object_selector_click_only_uses_point_prompt(tmp_path, monkeypatch) -> 
         ),
     )
 
-    assert records == {"box": None, "point": (3, 4)}
+    assert records == {"box": None, "points": [(3, 4)]}
     assert decode_data_url(result.mask).convert("L").getpixel((3, 3)) == 255
     assert result.data["source"] == "click"
+
+
+def test_object_selector_uses_multiple_canvas_points(tmp_path, monkeypatch) -> None:
+    manager = _object_selector_manager(tmp_path)
+    module = sys.modules["expandiffusion_plugin_object_selector"]
+    records = {}
+
+    def fake_segment_mask(image, box, points):
+        records["box"] = box
+        records["points"] = points
+        mask = Image.new("L", image.size, 0)
+        mask.paste(255, (2, 2, 6, 6))
+        return mask, 0.77
+
+    monkeypatch.setattr(module, "_segment_mask", fake_segment_mask)
+
+    result = manager.run_action(
+        "object-selector",
+        PluginActionRunRequest(
+            image=_solid_data_url((8, 8), (10, 20, 30, 255)),
+            target={
+                "kind": "canvas",
+                "bounds": {"x": 0, "y": 0, "width": 8, "height": 8},
+                "scale": 1,
+                "points": [{"x": 3, "y": 4}, {"x": 5, "y": 6}],
+                "visible_mask": _mask_data_url((8, 8), (0, 0, 8, 8)),
+            },
+        ),
+    )
+
+    assert records == {"box": None, "points": [(3, 4), (5, 6)]}
+    assert decode_data_url(result.mask).convert("L").getpixel((4, 4)) == 255
 
 
 def test_object_selector_sam_prompt_shape(tmp_path, monkeypatch) -> None:
@@ -1821,12 +1903,12 @@ def test_object_selector_sam_prompt_shape(tmp_path, monkeypatch) -> None:
     mask, confidence = module._segment_mask(
         Image.new("RGB", (8, 8), (10, 20, 30)),
         (1, 2, 6, 7),
-        (3, 4),
+        [(3, 4), (5, 6)],
     )
 
     assert captured["input_boxes"] == [[[1, 2, 6, 7]]]
-    assert captured["input_points"] == [[[[3, 4]]]]
-    assert captured["input_labels"] == [[[1]]]
+    assert captured["input_points"] == [[[[3, 4], [5, 6]]]]
+    assert captured["input_labels"] == [[[1, 1]]]
     assert mask.getbbox() == (0, 0, 8, 8)
     assert confidence == pytest.approx(0.83)
 

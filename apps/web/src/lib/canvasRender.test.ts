@@ -877,6 +877,7 @@ describe('canvasRender', () => {
     const input = await renderPluginActionInput(documentWithGuide(), {
       kind: 'canvas',
       point: { x: 64, y: 68 },
+      points: [{ x: 64, y: 68 }, { x: 70, y: 72 }],
     })
 
     expect(input.image).toBe('data:image/png;base64,128x128')
@@ -885,6 +886,7 @@ describe('canvasRender', () => {
       bounds: { x: 0, y: 0, width: 128, height: 128 },
       scale: 1,
       point: { x: 64, y: 68 },
+      points: [{ x: 64, y: 68 }, { x: 70, y: 72 }],
     })
     expect(input.target.visible_mask).toBe('data:image/png;base64,128x128')
   })

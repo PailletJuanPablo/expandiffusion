@@ -2180,6 +2180,75 @@ textarea:focus {
   min-width: 0;
 }
 
+.plugin-canvas-actions,
+.object-selection-list {
+  display: grid;
+  gap: 8px;
+}
+
+.plugin-canvas-actions .switch-row {
+  width: 100%;
+  justify-content: space-between;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.object-selection-list {
+  margin-top: 8px;
+}
+
+.object-selection-chip {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 34px;
+  padding: 6px 8px;
+  border: 1px solid rgba(18, 184, 200, 0.34);
+  border-radius: var(--radius-control);
+  color: var(--color-text);
+  background: rgba(237, 248, 251, 0.86);
+  text-align: left;
+}
+
+.object-selection-chip span {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  color: #ffffff;
+  background: var(--color-accent);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.object-selection-chip strong {
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.object-selection-chip small {
+  color: var(--color-text-secondary);
+  font-size: 10.5px;
+  font-weight: 740;
+}
+
+.object-selection-chip-muted {
+  border-color: var(--color-border-subtle);
+  color: var(--color-text-secondary);
+  background: var(--color-surface-muted);
+}
+
+.object-selection-chip-muted span {
+  background: var(--color-text-muted);
+}
+
 .plugin-image-result img {
   display: block;
   width: 100%;
@@ -2603,8 +2672,9 @@ textarea:focus {
 
 .onboarding-lesson-block {
   display: grid;
-  gap: 8px;
-  padding: 8px;
+  gap: 11px;
+  min-height: 140px;
+  padding: 13px;
   border: 1px solid rgba(18, 184, 200, 0.18);
   border-radius: var(--radius-control);
   background: rgba(255, 255, 255, 0.64);
@@ -2620,7 +2690,7 @@ textarea:focus {
   justify-content: space-between;
   gap: 10px;
   color: var(--color-text-strong);
-  font-size: 11px;
+  font-size: 12.5px;
   font-weight: 820;
 }
 
@@ -2632,6 +2702,7 @@ textarea:focus {
 
 .onboarding-message-dots {
   gap: 5px;
+  flex-wrap: wrap;
 }
 
 .onboarding-message-dots span {
@@ -2648,8 +2719,8 @@ textarea:focus {
 
 .onboarding-popover .onboarding-lesson-body {
   color: var(--color-text-secondary);
-  font-size: 11.75px;
-  line-height: 1.45;
+  font-size: 13px;
+  line-height: 1.55;
 }
 
 .onboarding-status {

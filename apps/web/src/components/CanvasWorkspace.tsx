@@ -48,6 +48,7 @@ import type {
   GenerationParameters,
   MaskStroke,
   Point,
+  PluginPreviewBox,
   ReferenceImageLayer,
   SelectionRect,
 } from "../domain/types";
@@ -60,6 +61,7 @@ import {
   planHfSpaceFillExpansion,
   renderMaskOverlayDataUrl,
 } from "../lib/canvasRender";
+import { canvasCursorForPoint } from "../lib/canvasInteraction";
 import { planCenteredDocumentViewport } from "../lib/canvasViewport";
 import { ONBOARDING_TARGET_CANVAS } from "../lib/onboardingTour";
 import { useI18n } from "../i18n/useI18n";
@@ -87,6 +89,7 @@ export function CanvasWorkspace() {
   const [semanticMaskOverlayDataUrl, setSemanticMaskOverlayDataUrl] =
     useState<string | null>(null);
   const [shiftPressed, setShiftPressed] = useState(false);
+  const { t } = useI18n();
   const { pluginToolsQuery } = useStudioQueries();
 
   const documentState = useEditorStore((state) => state.document);
@@ -310,6 +313,22 @@ export function CanvasWorkspace() {
   }, [documentState.semanticMaskDataUrl]);
 
   useEffect(() => {
+    const stage = stageRef.current;
+    if (!stage) {
+      return;
+    }
+    const cursor = canvasCursorForPoint({
+      documentState,
+      point: cursorPoint,
+      pluginCanvasToolActive,
+      panning,
+    });
+    if (pluginCanvasToolActive || stage.container().style.cursor === "crosshair") {
+      stage.container().style.cursor = cursor;
+    }
+  }, [cursorPoint, documentState, panning, pluginCanvasToolActive]);
+
+  useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Shift") {
         setShiftPressed(true);
@@ -380,7 +399,20 @@ export function CanvasWorkspace() {
     }
     if (pluginCanvasToolActive) {
       const point = getDocumentPoint();
-      setCanvasSelectionTarget(point ? { kind: "canvas", point } : { kind: "canvas" });
+      if (!point) {
+        setCanvasSelectionTarget({ kind: "canvas" });
+        return;
+      }
+      const currentPoints =
+        canvasSelectionTarget.kind === "canvas"
+          ? canvasSelectionTarget.points ??
+            (canvasSelectionTarget.point ? [canvasSelectionTarget.point] : [])
+          : [];
+      setCanvasSelectionTarget({
+        kind: "canvas",
+        point,
+        points: [...currentPoints, point],
+      });
       return;
     }
     if (pluginFrameToolActive && event.target === stageRef.current) {
@@ -454,6 +486,10 @@ export function CanvasWorkspace() {
 
   const handlePointerLeave = () => {
     setCursorPoint(null);
+    const stage = stageRef.current;
+    if (stage && stage.container().style.cursor === "crosshair") {
+      stage.container().style.cursor = "default";
+    }
     handlePointerUp();
   };
 
@@ -467,7 +503,7 @@ export function CanvasWorkspace() {
           .then(replaceRasterDataUrl)
           .catch((error) =>
             setErrorMessage(
-              error instanceof Error ? error.message : "Erase failed.",
+              error instanceof Error ? error.message : t("canvas.eraseFailed"),
             ),
           );
       }
@@ -485,7 +521,7 @@ export function CanvasWorkspace() {
       .then(replaceRasterDataUrl)
       .catch((error) =>
         setErrorMessage(
-          error instanceof Error ? error.message : "Erase failed.",
+          error instanceof Error ? error.message : t("canvas.eraseFailed"),
         ),
       );
   };
@@ -635,19 +671,36 @@ export function CanvasWorkspace() {
               listening={false}
             />
           ) : null}
-          {pluginCanvasToolActive &&
-          canvasSelectionTarget.kind === "canvas" &&
-          canvasSelectionTarget.point ? (
-            <Circle
-              x={canvasSelectionTarget.point.x}
-              y={canvasSelectionTarget.point.y}
-              radius={8 / viewport.zoom}
-              fill={CANVAS_THEME.inpaintMaskPreviewFill}
-              stroke={CANVAS_THEME.inpaintMaskPreviewStroke}
-              strokeWidth={2 / viewport.zoom}
-              listening={false}
+          {pluginCanvasToolActive && canvasSelectionTarget.kind === "canvas"
+            ? canvasTargetPoints(canvasSelectionTarget).map((point, index) => (
+                <Group key={`canvas-point-${index}`} listening={false}>
+                  <Circle
+                    x={point.x}
+                    y={point.y}
+                    radius={8 / viewport.zoom}
+                    fill={CANVAS_THEME.inpaintMaskPreviewFill}
+                    stroke={CANVAS_THEME.inpaintMaskPreviewStroke}
+                    strokeWidth={2 / viewport.zoom}
+                  />
+                  <Text
+                    x={point.x - 4 / viewport.zoom}
+                    y={point.y - 5 / viewport.zoom}
+                    text={String(index + 1)}
+                    fill={CANVAS_THEME.inpaintMaskPreviewStroke}
+                    fontSize={10 / viewport.zoom}
+                    fontStyle="bold"
+                  />
+                </Group>
+              ))
+            : null}
+          {activePluginPreview?.boxes?.map((box, index) => (
+            <PluginSelectionBox
+              key={box.id}
+              box={box}
+              index={index}
+              zoom={viewport.zoom}
             />
-          ) : null}
+          ))}
           {tool === TOOL_INPAINT_MASK
             ? documentState.maskStrokes.map((stroke) => (
                 <MaskStrokeNode key={stroke.id} stroke={stroke} />
@@ -794,6 +847,42 @@ export function CanvasWorkspace() {
         </Layer>
       </Stage>
     </main>
+  );
+}
+
+function canvasTargetPoints(target: Extract<CanvasSelectionTarget, { kind: "canvas" }>): Point[] {
+  return target.points ?? (target.point ? [target.point] : []);
+}
+
+function PluginSelectionBox({
+  box,
+  index,
+  zoom,
+}: {
+  box: PluginPreviewBox;
+  index: number;
+  zoom: number;
+}) {
+  return (
+    <Group listening={false}>
+      <Rect
+        x={box.bounds.x}
+        y={box.bounds.y}
+        width={box.bounds.width}
+        height={box.bounds.height}
+        stroke={CANVAS_THEME.inpaintMaskPreviewStroke}
+        strokeWidth={2 / zoom}
+        dash={[8 / zoom, 5 / zoom]}
+      />
+      <Text
+        x={box.bounds.x}
+        y={Math.max(0, box.bounds.y - 18 / zoom)}
+        text={`${index + 1}`}
+        fill={CANVAS_THEME.inpaintMaskPreviewStroke}
+        fontSize={13 / zoom}
+        fontStyle="bold"
+      />
+    </Group>
   );
 }
 

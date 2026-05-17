@@ -409,20 +409,50 @@ export async function renderPluginMaskToDocumentMask(
   maskDataUrl: string,
   target: Record<string, unknown>,
 ): Promise<string> {
+  return renderPluginMasksToDocumentMask(documentState, [maskDataUrl], target)
+}
+
+export async function renderPluginMasksToDocumentMask(
+  documentState: EditorDocument,
+  maskDataUrls: string[],
+  target: Record<string, unknown>,
+): Promise<string> {
+  if (maskDataUrls.length === 0) {
+    throw new AppError('PLUGIN_ACTION_MASK_REQUIRED', 'Select at least one detected object.')
+  }
   if (target.kind !== 'canvas') {
-    return maskDataUrl
+    return mergeMaskDataUrls(maskDataUrls)
   }
   const bounds = pluginCanvasTargetBounds(target)
   if (!bounds) {
-    return maskDataUrl
+    return mergeMaskDataUrls(maskDataUrls)
   }
-  const mask = await loadImageElement(maskDataUrl)
   const canvas = document.createElement('canvas')
   canvas.width = documentState.width
   canvas.height = documentState.height
   const context = requireCanvasContext(canvas)
   context.clearRect(0, 0, canvas.width, canvas.height)
-  context.drawImage(mask, bounds.x, bounds.y, bounds.width, bounds.height)
+  for (const maskDataUrl of maskDataUrls) {
+    await drawMaskDataUrl(context, maskDataUrl, bounds)
+  }
+  return canvas.toDataURL('image/png')
+}
+
+async function mergeMaskDataUrls(maskDataUrls: string[]): Promise<string> {
+  const firstMask = await loadImageElement(maskDataUrls[0])
+  const canvas = document.createElement('canvas')
+  canvas.width = firstMask.naturalWidth
+  canvas.height = firstMask.naturalHeight
+  const context = requireCanvasContext(canvas)
+  context.clearRect(0, 0, canvas.width, canvas.height)
+  for (const maskDataUrl of maskDataUrls) {
+    await drawMaskDataUrl(context, maskDataUrl, {
+      x: 0,
+      y: 0,
+      width: canvas.width,
+      height: canvas.height,
+    })
+  }
   return canvas.toDataURL('image/png')
 }
 
@@ -894,6 +924,10 @@ async function renderCanvasActionInput(
             y: (target.point.y - visibleBounds.y) * scale,
           }
         : undefined,
+      points: target.points?.map((point) => ({
+        x: (point.x - visibleBounds.x) * scale,
+        y: (point.y - visibleBounds.y) * scale,
+      })),
       visible_mask: renderVisibleMaskDataUrl(canvas),
     },
   }
@@ -990,6 +1024,41 @@ async function renderMaskAlphaCanvas(
   }
   context.putImageData(imageData, 0, 0)
   return canvas
+}
+
+async function drawMaskDataUrl(
+  context: CanvasRenderingContext2D,
+  maskDataUrl: string,
+  bounds: DocumentBounds,
+): Promise<void> {
+  const mask = await loadImageElement(maskDataUrl)
+  const width = Math.max(1, Math.round(bounds.width))
+  const height = Math.max(1, Math.round(bounds.height))
+  const left = Math.round(bounds.x)
+  const top = Math.round(bounds.y)
+  const sourceCanvas = document.createElement('canvas')
+  sourceCanvas.width = width
+  sourceCanvas.height = height
+  const sourceContext = requireCanvasContext(sourceCanvas)
+  sourceContext.drawImage(mask, 0, 0, width, height)
+  const sourceImage = sourceContext.getImageData(0, 0, width, height)
+  const targetImage = context.getImageData(left, top, width, height)
+  for (let index = 0; index < sourceImage.data.length; index += 4) {
+    const sourceAlpha = sourceImage.data[index + 3] / 255
+    const maskValue = Math.max(
+      sourceImage.data[index],
+      sourceImage.data[index + 1],
+      sourceImage.data[index + 2],
+    ) * sourceAlpha
+    if (maskValue < 128) {
+      continue
+    }
+    targetImage.data[index] = 255
+    targetImage.data[index + 1] = 255
+    targetImage.data[index + 2] = 255
+    targetImage.data[index + 3] = 255
+  }
+  context.putImageData(targetImage, left, top)
 }
 
 function pluginCanvasTargetBounds(target: Record<string, unknown>): DocumentBounds | null {

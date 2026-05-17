@@ -64,6 +64,16 @@ describe('metadata localization', () => {
     expect(tool.result_label).toBe('Descripcion de imagen')
     expect(tool.controls[0].label).toBe('Brillo')
   })
+
+  it('localizes object selector plugin controls', () => {
+    const t = createTranslator(LOCALE_ES)
+    const tool = localizePluginToolInfo(objectSelectorToolFixture(), t)
+
+    expect(tool.controls[0].label).toBe('Prompt de objeto')
+    expect(tool.controls[0].placeholder).toBe('persona, silla, logo...')
+    expect(tool.controls[1].label).toBe('Expandir mascara')
+    expect(tool.controls[2].label).toBe('Suavizar mascara')
+  })
 })
 
 function adapterFixture(): AdapterInfo {
@@ -197,6 +207,67 @@ function pluginToolFixture() {
         min: 0,
         max: 2,
         step: 0.05,
+        rows: null,
+        placeholder: null,
+      },
+    ],
+    default_values: {},
+  }
+}
+
+function objectSelectorToolFixture() {
+  return {
+    id: 'object-selector',
+    label: 'Object Selector',
+    description: 'Click visible canvas content or write a prompt to create an object mask.',
+    plugin_id: 'object-selector',
+    action_id: 'object-selector',
+    icon: 'wand-sparkles',
+    icon_color: '#0891b2',
+    accent_color: '#0891b2',
+    result_label: 'Object mask',
+    target: 'canvas',
+    live_preview: false,
+    controls: [
+      {
+        id: 'object_selector_prompt',
+        label: 'Object prompt',
+        kind: 'text',
+        section: 'basic',
+        plugin_id: 'object-selector',
+        options: [],
+        default_value: '',
+        min: null,
+        max: null,
+        step: null,
+        rows: null,
+        placeholder: 'person, chair, logo...',
+      },
+      {
+        id: 'object_selector_mask_expand',
+        label: 'Mask expand',
+        kind: 'slider',
+        section: 'basic',
+        plugin_id: 'object-selector',
+        options: [],
+        default_value: 4,
+        min: 0,
+        max: 64,
+        step: 1,
+        rows: null,
+        placeholder: null,
+      },
+      {
+        id: 'object_selector_mask_blur',
+        label: 'Mask blur',
+        kind: 'slider',
+        section: 'basic',
+        plugin_id: 'object-selector',
+        options: [],
+        default_value: 2,
+        min: 0,
+        max: 32,
+        step: 1,
         rows: null,
         placeholder: null,
       },

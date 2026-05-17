@@ -37,11 +37,11 @@ const TARGET_SELECTOR_SUFFIX = '"]'
 const SPOTLIGHT_PADDING = 10
 const SPOTLIGHT_RADIUS = 12
 const POPOVER_WIDTH = 340
-const POPOVER_WAITING_WIDTH = 420
+const POPOVER_WAITING_WIDTH = 520
 const POPOVER_GAP = 18
 const VIEWPORT_MARGIN = 18
 const POPOVER_ESTIMATED_HEIGHT = 280
-const POPOVER_WAITING_ESTIMATED_HEIGHT = 548
+const POPOVER_WAITING_ESTIMATED_HEIGHT = 620
 const MODEL_READY_ADVANCE_DELAY_MS = 900
 const IMAGE_READY_ADVANCE_DELAY_MS = 520
 const MODEL_LOADING_MESSAGE_INTERVAL_MS = 4200
@@ -55,18 +55,82 @@ const MODEL_LOADING_STAGES = Object.freeze([
 ])
 const MODEL_LOADING_MESSAGES = Object.freeze([
   {
+    key: 'warming',
     title: 'Warming the model',
     body: 'The image engine is moving into memory so it can read your prompt and the pixels around the edit area.',
   },
   {
+    key: 'context',
     title: 'Reading visual context',
     body: 'Generation works best when the model can borrow nearby edges, light, texture, and composition from the original image.',
   },
   {
+    key: 'faster',
     title: 'Getting faster after this',
     body: 'The first run is usually the slowest because files and GPU memory are being prepared. Once ready, the creative loop feels much quicker.',
   },
   {
+    key: 'latents',
+    title: 'A smaller map first',
+    body: 'Many modern image models do not paint every final pixel immediately. They work in a compact latent space first, then decode that plan back into an image.',
+  },
+  {
+    key: 'denoise',
+    title: 'From noise to structure',
+    body: 'Diffusion generation starts from a noisy image-like signal and removes noise step by step until shapes, lighting, and texture become readable.',
+  },
+  {
+    key: 'prompts',
+    title: 'Words become coordinates',
+    body: 'The prompt is converted into numbers the model can compare with visual patterns. Concrete nouns, materials, camera cues, and lighting tend to guide it better than vague adjectives alone.',
+  },
+  {
+    key: 'seeds',
+    title: 'Seeds are alternate timelines',
+    body: 'A seed fixes the starting noise. Keep the same seed to compare settings fairly, or change it when you want a genuinely different composition.',
+  },
+  {
+    key: 'edges',
+    title: 'Edges carry the illusion',
+    body: 'For expansion and inpaint, the most important pixels are often near the border. Matching those edges helps the new area feel like it was always part of the image.',
+  },
+  {
+    key: 'history',
+    title: 'The idea has old roots',
+    body: 'Diffusion models borrow the intuition of gradually corrupting data and then learning the reverse path. Image generation turned that math into a creative editing tool.',
+  },
+  {
+    key: 'vae',
+    title: 'A decoder finishes the image',
+    body: 'After the denoising pass, a decoder translates the compact representation into visible pixels. This is one reason model loading prepares more than a single file.',
+  },
+  {
+    key: 'vram',
+    title: 'VRAM is the workbench',
+    body: 'Large models need room for weights, temporary tensors, and image resolution. When VRAM is tight, smaller outputs or lighter profiles usually feel much smoother.',
+  },
+  {
+    key: 'steps',
+    title: 'More steps are not always better',
+    body: 'Sampling steps give the model more chances to refine the image, but after a point they can add time without a visible gain. The best setting is often the one that keeps iteration fast.',
+  },
+  {
+    key: 'composition',
+    title: 'Composition beats decoration',
+    body: 'A clear prompt about layout, subject position, and light direction often helps more than adding a long list of style words. The model needs a scene plan, not only texture.',
+  },
+  {
+    key: 'references',
+    title: 'References anchor the style',
+    body: 'When a workflow uses the visible image as context, nearby color and texture become a quiet reference. That is why clean source images usually produce cleaner continuations.',
+  },
+  {
+    key: 'patience',
+    title: 'The first minute is setup',
+    body: 'Model loading is not generation yet. The app is resolving files, building the pipeline, moving it to the device, and preparing optional extensions before the creative loop begins.',
+  },
+  {
+    key: 'next',
     title: 'Next up',
     body: 'After the model is ready, you will choose an image, mark where it should grow or change, and guide the result with a short prompt.',
   },
@@ -613,7 +677,7 @@ function ModelLoadingLessons() {
   const [messageIndex, setMessageIndex] = useState(0)
   const prefersReducedMotion = useReducedMotion()
   const message = MODEL_LOADING_MESSAGES[messageIndex] ?? MODEL_LOADING_MESSAGES[0]
-  const messageKey = loadingMessageKey(messageIndex)
+  const messageKey = message.key
   useEffect(() => {
     const timer = window.setInterval(() => {
       setMessageIndex((current) => (current + 1) % MODEL_LOADING_MESSAGES.length)
@@ -642,7 +706,7 @@ function ModelLoadingLessons() {
       <div className="onboarding-message-dots" aria-label={t('onboarding.loadingMessageProgress')}>
         {MODEL_LOADING_MESSAGES.map((item, index) => (
           <span
-            key={item.title}
+            key={item.key}
             className={index === messageIndex ? 'onboarding-message-dot-active' : ''}
           />
         ))}
@@ -671,19 +735,6 @@ function formatBytes(value: number): string {
     amount /= 1024
   }
   return `${amount.toFixed(1)} TB`
-}
-
-function loadingMessageKey(index: number): string {
-  if (index === 1) {
-    return 'context'
-  }
-  if (index === 2) {
-    return 'faster'
-  }
-  if (index === 3) {
-    return 'next'
-  }
-  return 'warming'
 }
 
 function getSpotlightStyle(targetRect: TourTargetRect | null): CSSProperties {

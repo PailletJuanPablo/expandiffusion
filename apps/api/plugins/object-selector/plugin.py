@@ -76,8 +76,8 @@ class ObjectSelectorAction(PluginAction):
     def run(self, context: PluginActionContext) -> PluginActionResult:
         image = context.image.convert("RGB")
         prompt = str(context.control(PARAM_PROMPT, "") or "").strip()
-        point = _target_point(context.target, image.size)
-        if not prompt and point is None:
+        points = _target_points(context.target, image.size)
+        if not prompt and not points:
             raise AppError(
                 constants.ERROR_PLUGIN_ACTION_FAILED,
                 "Click the object or enter an object prompt before selecting.",
@@ -85,21 +85,29 @@ class ObjectSelectorAction(PluginAction):
             )
 
         boxes = _detect_prompt_boxes(image, prompt) if prompt else []
-        if prompt and not boxes and point is None:
+        if prompt and not boxes and not points:
             raise AppError(
                 constants.ERROR_PLUGIN_ACTION_FAILED,
                 f"Object selector did not detect '{prompt}'.",
                 status_code=404,
             )
 
-        selected_box = _select_box(boxes, point)
-        mask, confidence = _segment_mask(image, selected_box, point)
-        mask = _postprocess_mask(
-            mask,
-            _visible_mask(context.target, image.size),
-            _int_control(context, PARAM_MASK_EXPAND, DEFAULT_MASK_EXPAND, 0, 64),
-            _int_control(context, PARAM_MASK_BLUR, DEFAULT_MASK_BLUR, 0, 32),
+        visible_mask = _visible_mask(context.target, image.size)
+        expand = _int_control(context, PARAM_MASK_EXPAND, DEFAULT_MASK_EXPAND, 0, 64)
+        blur = _int_control(context, PARAM_MASK_BLUR, DEFAULT_MASK_BLUR, 0, 32)
+        selections = (
+            _segment_all_boxes(image, boxes, visible_mask, expand, blur)
+            if boxes and not points
+            else [_segment_selected_object(image, boxes, points, visible_mask, expand, blur)]
         )
+        selections = [
+            selection for selection in selections if selection["mask"].getbbox() is not None
+        ]
+        if selections:
+            mask = _merge_masks([selection["mask"] for selection in selections])
+        else:
+            mask = Image.new("L", image.size, 0)
+        confidence = _selection_confidence(selections)
         if mask.getbbox() is None:
             raise AppError(
                 constants.ERROR_PLUGIN_ACTION_FAILED,
@@ -107,6 +115,7 @@ class ObjectSelectorAction(PluginAction):
                 status_code=404,
             )
 
+        selected_box = selections[0]["box"] if len(selections) == 1 else None
         ordered_boxes = _selected_box_first(boxes, selected_box)
         return PluginActionResult(
             action_id=self.id,
@@ -115,7 +124,8 @@ class ObjectSelectorAction(PluginAction):
             data={
                 "boxes": [_box_report(box) for box in ordered_boxes],
                 "confidence": confidence,
-                "source": _selection_source(prompt, point),
+                "source": _selection_source(prompt, points),
+                "selections": [_selection_report(selection) for selection in selections],
                 "target": context.target,
             },
         )
@@ -177,7 +187,7 @@ def _detect_prompt_boxes(image: Image.Image, prompt: str) -> list[dict[str, Any]
 def _segment_mask(
     image: Image.Image,
     box: tuple[int, int, int, int] | None,
-    point: tuple[int, int] | None,
+    points: list[tuple[int, int]],
 ) -> tuple[Image.Image, float | None]:
     try:
         import torch
@@ -190,9 +200,9 @@ def _segment_mask(
 
     processor, model = _load_sam()
     kwargs: dict[str, Any] = {"return_tensors": "pt"}
-    if point is not None:
-        kwargs["input_points"] = [[[[point[0], point[1]]]]]
-        kwargs["input_labels"] = [[[1]]]
+    if points:
+        kwargs["input_points"] = [[[list(point) for point in points]]]
+        kwargs["input_labels"] = [[[1 for _point in points]]]
     if box is not None:
         kwargs["input_boxes"] = [[list(box)]]
     inputs = processor(image, **kwargs)
@@ -216,6 +226,76 @@ def _segment_mask(
         selected = selected[min(index, selected.shape[0] - 1)]
     array = selected.numpy().astype(np.uint8) * 255
     return Image.fromarray(array, mode="L"), float(scores[index].item()) if scores.numel() else None
+
+
+def _segment_all_boxes(
+    image: Image.Image,
+    boxes: list[dict[str, Any]],
+    visible_mask: Image.Image,
+    expand: int,
+    blur: int,
+) -> list[dict[str, Any]]:
+    selections = []
+    for index, box in enumerate(boxes):
+        box_tuple = _box_tuple(box)
+        mask, confidence = _segment_mask(image, box_tuple, [])
+        selections.append(
+            {
+                "id": f"object-{index + 1}",
+                "box": box_tuple,
+                "label": str(box.get("label", "")),
+                "confidence": confidence,
+                "mask": _postprocess_mask(mask, visible_mask, expand, blur),
+            }
+        )
+    return selections
+
+
+def _segment_selected_object(
+    image: Image.Image,
+    boxes: list[dict[str, Any]],
+    points: list[tuple[int, int]],
+    visible_mask: Image.Image,
+    expand: int,
+    blur: int,
+) -> dict[str, Any]:
+    selected_box = _select_box(boxes, points)
+    mask, confidence = _segment_mask(image, selected_box, points)
+    source_box = _box_for_tuple(boxes, selected_box)
+    return {
+        "id": f"object-{_box_index(boxes, selected_box) + 1}",
+        "box": selected_box,
+        "label": str(source_box.get("label", "")) if source_box else "",
+        "confidence": confidence,
+        "mask": _postprocess_mask(mask, visible_mask, expand, blur),
+    }
+
+
+def _merge_masks(masks: list[Image.Image]) -> Image.Image:
+    merged = Image.new("L", masks[0].size, 0)
+    for mask in masks:
+        merged = ImageChops.lighter(merged, mask)
+    return merged
+
+
+def _selection_confidence(selections: list[dict[str, Any]]) -> float | None:
+    confidences = [
+        selection["confidence"]
+        for selection in selections
+        if isinstance(selection.get("confidence"), int | float)
+    ]
+    return max(confidences) if confidences else None
+
+
+def _selection_report(selection: dict[str, Any]) -> dict[str, Any]:
+    box = selection.get("box")
+    return {
+        "id": selection["id"],
+        "box": list(box) if box else None,
+        "label": selection["label"],
+        "confidence": selection["confidence"],
+        "mask": encode_png_data_url(selection["mask"]),
+    }
 
 
 def _load_florence_detector() -> tuple[Any, Any]:
@@ -291,11 +371,26 @@ def _visible_mask(target: dict[str, Any], size: tuple[int, int]) -> Image.Image:
     return Image.new("L", size, 255)
 
 
-def _target_point(
+def _target_points(
     target: dict[str, Any],
     size: tuple[int, int],
-) -> tuple[int, int] | None:
+) -> list[tuple[int, int]]:
+    points = target.get("points")
+    if isinstance(points, list):
+        parsed_points = [
+            point for point in (_parse_target_point(item, size) for item in points) if point
+        ]
+        if parsed_points:
+            return parsed_points
     point = target.get("point")
+    parsed_point = _parse_target_point(point, size)
+    return [parsed_point] if parsed_point else []
+
+
+def _parse_target_point(
+    point: Any,
+    size: tuple[int, int],
+) -> tuple[int, int] | None:
     if not isinstance(point, dict):
         return None
     x = _number(point.get("x"))
@@ -310,18 +405,18 @@ def _target_point(
 
 def _select_box(
     boxes: list[dict[str, Any]],
-    point: tuple[int, int] | None,
+    points: list[tuple[int, int]],
 ) -> tuple[int, int, int, int] | None:
     if not boxes:
         return None
-    if point is None:
+    if not points:
         return _box_tuple(boxes[0])
     return _box_tuple(
         min(
             boxes,
             key=lambda box: (
-                0 if _box_contains(_box_tuple(box), point) else 1,
-                _box_point_distance(_box_tuple(box), point),
+                0 if _box_contains_any_point(_box_tuple(box), points) else 1,
+                _box_points_distance(_box_tuple(box), points),
                 -_confidence(box),
             ),
         )
@@ -337,6 +432,30 @@ def _selected_box_first(
     return sorted(boxes, key=lambda box: 0 if _box_tuple(box) == selected_box else 1)
 
 
+def _box_for_tuple(
+    boxes: list[dict[str, Any]],
+    selected_box: tuple[int, int, int, int] | None,
+) -> dict[str, Any] | None:
+    if selected_box is None:
+        return None
+    for box in boxes:
+        if _box_tuple(box) == selected_box:
+            return box
+    return None
+
+
+def _box_index(
+    boxes: list[dict[str, Any]],
+    selected_box: tuple[int, int, int, int] | None,
+) -> int:
+    if selected_box is None:
+        return 0
+    for index, box in enumerate(boxes):
+        if _box_tuple(box) == selected_box:
+            return index
+    return 0
+
+
 def _box_report(box: dict[str, Any]) -> dict[str, Any]:
     return {
         "box": list(_box_tuple(box)),
@@ -345,8 +464,8 @@ def _box_report(box: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _selection_source(prompt: str, point: tuple[int, int] | None) -> str:
-    if prompt and point is not None:
+def _selection_source(prompt: str, points: list[tuple[int, int]]) -> str:
+    if prompt and points:
         return "prompt_and_click"
     if prompt:
         return "prompt"
@@ -379,10 +498,21 @@ def _box_contains(box: tuple[int, int, int, int], point: tuple[int, int]) -> boo
     return box[0] <= point[0] <= box[2] and box[1] <= point[1] <= box[3]
 
 
+def _box_contains_any_point(
+    box: tuple[int, int, int, int],
+    points: list[tuple[int, int]],
+) -> bool:
+    return any(_box_contains(box, point) for point in points)
+
+
 def _box_point_distance(box: tuple[int, int, int, int], point: tuple[int, int]) -> float:
     center_x = (box[0] + box[2]) / 2
     center_y = (box[1] + box[3]) / 2
     return ((center_x - point[0]) ** 2 + (center_y - point[1]) ** 2) ** 0.5
+
+
+def _box_points_distance(box: tuple[int, int, int, int], points: list[tuple[int, int]]) -> float:
+    return min(_box_point_distance(box, point) for point in points)
 
 
 def _confidence(box: dict[str, Any]) -> float:

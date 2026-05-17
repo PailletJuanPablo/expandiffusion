@@ -81,8 +81,10 @@ import type {
   EditorDocument,
   GenerationParameters,
   PluginImagePreview,
+  PluginPreviewBox,
   PluginActionResult,
   PluginToolInfo,
+  Point,
   SelectionRect,
   ViewportState,
 } from "../domain/types";
@@ -98,7 +100,7 @@ import {
 import {
   eraseSemanticMaskFromDocument,
   renderMaskOverlayDataUrl,
-  renderPluginMaskToDocumentMask,
+  renderPluginMasksToDocumentMask,
   renderPluginActionInput,
 } from "../lib/canvasRender";
 import {
@@ -265,6 +267,9 @@ export function InspectorPanel() {
   );
   const viewport = useEditorStore((state) => state.viewport);
   const setTool = useEditorStore((state) => state.setTool);
+  const setCanvasSelectionTarget = useEditorStore(
+    (state) => state.setCanvasSelectionTarget,
+  );
   const setSelectedAdapterId = useEditorStore(
     (state) => state.setSelectedAdapterId,
   );
@@ -826,6 +831,7 @@ export function InspectorPanel() {
                       tool={activePluginTool}
                       documentState={documentState}
                       canvasSelectionTarget={canvasSelectionTarget}
+                      onCanvasSelectionTargetChange={setCanvasSelectionTarget}
                       onSelectionChange={setSelection}
                       onRasterDataUrlChange={updateRasterDataUrl}
                       onReferenceChange={updateReference}
@@ -1065,6 +1071,7 @@ function PluginToolPanel({
   tool,
   documentState,
   canvasSelectionTarget,
+  onCanvasSelectionTargetChange,
   onSelectionChange,
   onRasterDataUrlChange,
   onReferenceChange,
@@ -1077,6 +1084,7 @@ function PluginToolPanel({
   tool: PluginToolInfo;
   documentState: EditorDocument;
   canvasSelectionTarget: CanvasSelectionTarget;
+  onCanvasSelectionTargetChange: (target: CanvasSelectionTarget) => void;
   onSelectionChange: (selection: SelectionRect) => void;
   onRasterDataUrlChange: (dataUrl: string) => void;
   onReferenceChange: (
@@ -1093,11 +1101,11 @@ function PluginToolPanel({
   const [controlValues, setControlValues] = useState<Record<string, unknown>>(
     {},
   );
-  const [result, setResult] = useState<{
-    result: PluginActionResult;
-    target: CanvasSelectionTarget;
-    actionTarget: Record<string, unknown>;
-  } | null>(null);
+  const [result, setResult] = useState<PluginToolRunResult | null>(null);
+  const [excludedSelectionIds, setExcludedSelectionIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [autoProcessClick, setAutoProcessClick] = useState(false);
   const [previewPending, setPreviewPending] = useState(false);
   const previewSequence = useRef(0);
   const autoProcessKeyRef = useRef<string | null>(null);
@@ -1114,16 +1122,45 @@ function PluginToolPanel({
   );
   const actionTargetKey = pluginActionTargetKey(actionTarget);
 
+  const updateObjectPreview = (
+    nextResult: PluginToolRunResult,
+    excludedIds: Set<string>,
+  ) => {
+    const maskDataUrls = activeObjectMaskDataUrls(nextResult.result, excludedIds);
+    if (maskDataUrls.length === 0) {
+      onPluginPreviewClear(tool.id);
+      return;
+    }
+    renderPluginMasksToDocumentMask(
+      documentState,
+      maskDataUrls,
+      nextResult.actionTarget,
+    )
+      .then((maskDataUrl) => renderMaskOverlayDataUrl(maskDataUrl))
+      .then((image) => {
+        onPluginPreviewChange({
+          toolId: tool.id,
+          image,
+          target: nextResult.target,
+          boxes: activeObjectPreviewBoxes(nextResult.result, nextResult.actionTarget, excludedIds),
+        });
+      })
+      .catch((error) => {
+        onError(error instanceof Error ? error.message : t("errors.pluginToolFailed"));
+      });
+  };
+
   const mutation = useMutation({
     mutationFn: async () => {
       const target = getPluginToolActionTarget(tool, canvasSelectionTarget);
       if (!target) {
-        throw new Error("Select an uploaded image on the canvas first.");
+        throw new Error(t("errors.selectUploadedImage"));
       }
       return runToolAction(tool, documentState, target, controlPayload);
     },
     onSuccess: (nextResult) => {
       setResult(nextResult);
+      setExcludedSelectionIds(new Set());
       onError(null);
       if (tool.target !== PLUGIN_TOOL_TARGET_CANVAS || !nextResult.result.mask) {
         if (!livePreview) {
@@ -1131,22 +1168,7 @@ function PluginToolPanel({
         }
         return;
       }
-      renderPluginMaskToDocumentMask(
-        documentState,
-        nextResult.result.mask,
-        nextResult.actionTarget,
-      )
-        .then((maskDataUrl) => renderMaskOverlayDataUrl(maskDataUrl))
-        .then((image) => {
-          onPluginPreviewChange({
-            toolId: tool.id,
-            image,
-            target: nextResult.target,
-          });
-        })
-        .catch((error) => {
-          onError(error instanceof Error ? error.message : t("errors.pluginToolFailed"));
-        });
+      updateObjectPreview(nextResult, new Set());
     },
     onError: (error) => {
       autoProcessKeyRef.current = null;
@@ -1159,11 +1181,20 @@ function PluginToolPanel({
   }, [tool.id]);
 
   useEffect(() => {
+    const resetTimer = window.setTimeout(() => {
+      setResult(null);
+      setExcludedSelectionIds(new Set());
+    }, 0);
+    return () => window.clearTimeout(resetTimer);
+  }, [actionTargetKey]);
+
+  useEffect(() => {
     if (
+      !autoProcessClick ||
       livePreview ||
       tool.target !== PLUGIN_TOOL_TARGET_CANVAS ||
       actionTarget?.kind !== "canvas" ||
-      !actionTarget.point ||
+      canvasTargetPoints(actionTarget).length === 0 ||
       processingDisabled
     ) {
       return;
@@ -1179,6 +1210,7 @@ function PluginToolPanel({
   }, [
     actionTarget,
     actionTargetKey,
+    autoProcessClick,
     controlPayload,
     livePreview,
     mutation,
@@ -1291,9 +1323,10 @@ function PluginToolPanel({
     if (!result?.result.mask) {
       return;
     }
-    renderPluginMaskToDocumentMask(
+    const maskDataUrls = activeObjectMaskDataUrls(result.result, excludedSelectionIds);
+    renderPluginMasksToDocumentMask(
       documentState,
-      result.result.mask,
+      maskDataUrls.length > 0 ? maskDataUrls : [result.result.mask],
       result.actionTarget,
     )
       .then((maskDataUrl) => {
@@ -1311,9 +1344,10 @@ function PluginToolPanel({
     if (!result?.result.mask) {
       return;
     }
-    renderPluginMaskToDocumentMask(
+    const maskDataUrls = activeObjectMaskDataUrls(result.result, excludedSelectionIds);
+    renderPluginMasksToDocumentMask(
       documentState,
-      result.result.mask,
+      maskDataUrls.length > 0 ? maskDataUrls : [result.result.mask],
       result.actionTarget,
     )
       .then((maskDataUrl) =>
@@ -1330,10 +1364,41 @@ function PluginToolPanel({
       );
   };
 
+  const objectSelections = result ? pluginObjectSelections(result.result) : [];
+  const activeSelectionCount = objectSelections.filter(
+    (selection) => !excludedSelectionIds.has(selection.id),
+  ).length;
+  const toggleObjectSelection = (selectionId: string) => {
+    if (!result) {
+      return;
+    }
+    setExcludedSelectionIds((current) => {
+      const next = new Set(current);
+      if (next.has(selectionId)) {
+        next.delete(selectionId);
+      } else {
+        next.add(selectionId);
+      }
+      updateObjectPreview(result, next);
+      return next;
+    });
+  };
+  const clearCanvasPoints = () => {
+    onCanvasSelectionTargetChange({ kind: "canvas" });
+    setResult(null);
+    setExcludedSelectionIds(new Set());
+    onPluginPreviewClear(tool.id);
+  };
+
   return (
     <>
       {tool.target === PLUGIN_TOOL_TARGET_CANVAS ? (
-        <PluginCanvasTargetSection canvasSelectionTarget={canvasSelectionTarget} />
+        <PluginCanvasTargetSection
+          canvasSelectionTarget={canvasSelectionTarget}
+          autoProcessClick={autoProcessClick}
+          onAutoProcessClickChange={setAutoProcessClick}
+          onClearPoints={clearCanvasPoints}
+        />
       ) : tool.target === PLUGIN_TOOL_TARGET_IMAGE ? (
         <PluginImageTargetSection
           documentState={documentState}
@@ -1434,11 +1499,39 @@ function PluginToolPanel({
               src={result.result.mask}
               alt={t("inspector.objectMaskPreview", {}, "Object mask preview")}
             />
+            {objectSelections.length > 1 ? (
+              <div className="object-selection-list">
+                {objectSelections.map((selection, index) => {
+                  const active = !excludedSelectionIds.has(selection.id);
+                  return (
+                    <button
+                      key={selection.id}
+                      type="button"
+                      className={
+                        active
+                          ? "object-selection-chip"
+                          : "object-selection-chip object-selection-chip-muted"
+                      }
+                      onClick={() => toggleObjectSelection(selection.id)}
+                    >
+                      <span>{index + 1}</span>
+                      <strong>{selection.label || t("common.result")}</strong>
+                      <small>
+                        {active
+                          ? t("inspector.selected", {}, "Selected")
+                          : t("inspector.removed", {}, "Removed")}
+                      </small>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : null}
             <div className="plugin-preview-actions">
               <Button
                 type="button"
                 variant="secondary"
                 size="compact"
+                disabled={objectSelections.length > 0 && activeSelectionCount === 0}
                 onClick={applyMaskResult}
               >
                 <Paintbrush size={14} />
@@ -1448,6 +1541,7 @@ function PluginToolPanel({
                 type="button"
                 variant="danger"
                 size="compact"
+                disabled={objectSelections.length > 0 && activeSelectionCount === 0}
                 onClick={eraseMaskResult}
               >
                 <Eraser size={14} />
@@ -1489,6 +1583,19 @@ function PluginToolPanel({
   );
 }
 
+interface PluginToolRunResult {
+  result: PluginActionResult;
+  target: CanvasSelectionTarget;
+  actionTarget: Record<string, unknown>;
+}
+
+interface PluginObjectSelection {
+  id: string;
+  label: string;
+  box: DocumentBounds | null;
+  mask: string;
+}
+
 function PluginImageTargetSection({
   documentState,
   canvasSelectionTarget,
@@ -1513,30 +1620,62 @@ function PluginImageTargetSection({
 
 function PluginCanvasTargetSection({
   canvasSelectionTarget,
+  autoProcessClick,
+  onAutoProcessClickChange,
+  onClearPoints,
 }: {
   canvasSelectionTarget: CanvasSelectionTarget;
+  autoProcessClick: boolean;
+  onAutoProcessClickChange: (value: boolean) => void;
+  onClearPoints: () => void;
 }) {
   const { t } = useI18n();
-  const point =
+  const points =
     canvasSelectionTarget.kind === "canvas"
-      ? canvasSelectionTarget.point
-      : undefined;
+      ? canvasTargetPoints(canvasSelectionTarget)
+      : [];
   return (
     <section className="tool-selection-context">
       <strong>{t("inspector.visibleCanvas", {}, "Visible canvas")}</strong>
       <span>
-        {point
+        {points.length > 0
           ? t(
-              "inspector.objectClickSelected",
-              { x: Math.round(point.x), y: Math.round(point.y) },
-              "Click point selected.",
+              "inspector.objectPointsSelected",
+              { count: points.length },
+              `${points.length} point(s) selected. Add more points or process.`,
             )
           : t(
               "inspector.objectPromptOnly",
               {},
-              "Enter a prompt or click the object on the canvas.",
+              "Enter a prompt or click one or more points on the canvas.",
             )}
       </span>
+      <div className="plugin-canvas-actions">
+        <button
+          type="button"
+          className={autoProcessClick ? "switch-row switch-row-active" : "switch-row"}
+          onClick={() => onAutoProcessClickChange(!autoProcessClick)}
+        >
+          <span>{t("inspector.autoProcessClick", {}, "Auto process click")}</span>
+          <span
+            className={autoProcessClick ? "switch-root switch-root-checked" : "switch-root"}
+          >
+            <span
+              className={autoProcessClick ? "switch-thumb switch-thumb-checked" : "switch-thumb"}
+            />
+          </span>
+        </button>
+        <Button
+          type="button"
+          variant="secondary"
+          size="compact"
+          disabled={points.length === 0}
+          onClick={onClearPoints}
+        >
+          <RotateCcw size={14} />
+          {t("inspector.clearPoints", {}, "Clear points")}
+        </Button>
+      </div>
     </section>
   );
 }
@@ -1555,6 +1694,116 @@ function PluginToolButtonIcon({ icon }: { icon: string }) {
     return <WandSparkles size={16} />;
   }
   return <TextSearch size={16} />;
+}
+
+function canvasTargetPoints(target: Extract<CanvasSelectionTarget, { kind: "canvas" }>): Point[] {
+  return target.points ?? (target.point ? [target.point] : []);
+}
+
+function pluginObjectSelections(result: PluginActionResult): PluginObjectSelection[] {
+  const selections = result.data.selections;
+  if (!Array.isArray(selections)) {
+    return [];
+  }
+  return selections.flatMap((selection): PluginObjectSelection[] => {
+    if (!selection || typeof selection !== "object") {
+      return [];
+    }
+    const item = selection as Record<string, unknown>;
+    const id = typeof item.id === "string" ? item.id : "";
+    const mask = typeof item.mask === "string" ? item.mask : "";
+    if (!id || !mask) {
+      return [];
+    }
+    return [
+      {
+        id,
+        mask,
+        label: typeof item.label === "string" ? item.label : "",
+        box: pluginSelectionBox(item.box),
+      },
+    ];
+  });
+}
+
+function activeObjectMaskDataUrls(
+  result: PluginActionResult,
+  excludedIds: Set<string>,
+): string[] {
+  const selections = pluginObjectSelections(result);
+  if (selections.length === 0) {
+    return result.mask ? [result.mask] : [];
+  }
+  return selections
+    .filter((selection) => !excludedIds.has(selection.id))
+    .map((selection) => selection.mask);
+}
+
+function activeObjectPreviewBoxes(
+  result: PluginActionResult,
+  actionTarget: Record<string, unknown>,
+  excludedIds: Set<string>,
+): PluginPreviewBox[] {
+  const targetBounds = pluginActionTargetBounds(actionTarget);
+  const scale = pluginActionTargetScale(actionTarget);
+  if (!targetBounds || scale <= 0) {
+    return [];
+  }
+  return pluginObjectSelections(result)
+    .filter((selection) => selection.box && !excludedIds.has(selection.id))
+    .map((selection) => ({
+      id: selection.id,
+      label: selection.label,
+      bounds: {
+        x: targetBounds.x + selection.box!.x / scale,
+        y: targetBounds.y + selection.box!.y / scale,
+        width: selection.box!.width / scale,
+        height: selection.box!.height / scale,
+      },
+    }));
+}
+
+function pluginSelectionBox(value: unknown): DocumentBounds | null {
+  if (!Array.isArray(value) || value.length < 4) {
+    return null;
+  }
+  const [left, top, right, bottom] = value.map((item) =>
+    typeof item === "number" && Number.isFinite(item) ? item : null,
+  );
+  if (left === null || top === null || right === null || bottom === null) {
+    return null;
+  }
+  return {
+    x: left,
+    y: top,
+    width: Math.max(0, right - left),
+    height: Math.max(0, bottom - top),
+  };
+}
+
+function pluginActionTargetBounds(target: Record<string, unknown>): DocumentBounds | null {
+  const bounds = target.bounds;
+  if (!bounds || typeof bounds !== "object") {
+    return null;
+  }
+  const item = bounds as Record<string, unknown>;
+  const x = finiteNumber(item.x);
+  const y = finiteNumber(item.y);
+  const width = finiteNumber(item.width);
+  const height = finiteNumber(item.height);
+  if (x === null || y === null || width === null || height === null) {
+    return null;
+  }
+  return { x, y, width, height };
+}
+
+function pluginActionTargetScale(target: Record<string, unknown>): number {
+  const scale = finiteNumber(target.scale);
+  return scale ?? 1;
+}
+
+function finiteNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 function getPluginToolActionTarget(
@@ -1609,11 +1858,7 @@ async function runToolAction(
   documentState: EditorDocument,
   target: CanvasSelectionTarget,
   controls: Record<string, unknown>,
-): Promise<{
-  result: PluginActionResult;
-  target: CanvasSelectionTarget;
-  actionTarget: Record<string, unknown>;
-}> {
+): Promise<PluginToolRunResult> {
   const input = await renderPluginActionInput(documentState, target);
   const nextResult = await runPluginAction(tool.action_id, {
     image: input.image,
@@ -1635,8 +1880,11 @@ function pluginActionTargetKey(target: CanvasSelectionTarget | null): string {
     return `${target.kind}:${target.id}`;
   }
   if (target.kind === "canvas") {
-    return target.point
-      ? `${target.kind}:${Math.round(target.point.x)}:${Math.round(target.point.y)}`
+    const points = canvasTargetPoints(target);
+    return points.length > 0
+      ? `${target.kind}:${points
+          .map((point) => `${Math.round(point.x)}:${Math.round(point.y)}`)
+          .join("|")}`
       : target.kind;
   }
   return target.kind;

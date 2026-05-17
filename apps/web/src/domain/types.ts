@@ -71,7 +71,7 @@ export type CanvasSelectionTarget =
   | { kind: 'none' }
   | { kind: 'frame' }
   | { kind: 'raster' }
-  | { kind: 'canvas'; point?: Point }
+  | { kind: 'canvas'; point?: Point; points?: Point[] }
   | { kind: 'reference'; id: string }
 
 export interface EditorDocument {
@@ -446,6 +446,13 @@ export interface PluginImagePreview {
   toolId: string
   image: string
   target: CanvasSelectionTarget
+  boxes?: PluginPreviewBox[]
+}
+
+export interface PluginPreviewBox {
+  id: string
+  label: string
+  bounds: DocumentBounds
 }
 
 export interface EditorStoreState {
