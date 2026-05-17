@@ -12,6 +12,12 @@ const CONTROLNET_HIDDEN_CONTROL_IDS = new Set([
   'control_guidance_end',
 ])
 
+const INPAINT_CONTROLNET_CONTROL_IDS = new Set([
+  'controlnet_conditioning_scale',
+  'control_guidance_start',
+  'control_guidance_end',
+])
+
 const INPAINT_HIDDEN_CONTROL_IDS = new Set([
   'outpaint_max_width',
   'outpaint_max_height',
@@ -38,9 +44,15 @@ const OUTPAINT_HIDDEN_CONTROL_IDS = new Set([
  * @param section - Section id to select.
  * @returns Controls belonging to the section.
  */
-export function controlsForSection(controls: ControlSchema[], section: string): ControlSchema[] {
+export function controlsForSection(
+  controls: ControlSchema[],
+  section: string,
+  options: { generationMode?: GenerationMode } = {},
+): ControlSchema[] {
   return controls.filter(
-    (control) => control.section === section && isControlnetControlVisible(control.id),
+    (control) =>
+      control.section === section &&
+      isControlnetControlVisible(control.id, options.generationMode),
   )
 }
 
@@ -48,15 +60,29 @@ export function controlsForGenerationMode(
   controls: ControlSchema[],
   generationMode: GenerationMode,
 ): ControlSchema[] {
-  const visibleControls = controls.filter((control) => isControlnetControlVisible(control.id))
+  const visibleControls = controls.filter((control) =>
+    isControlnetControlVisible(control.id, generationMode),
+  )
   if (generationMode === GENERATION_MODE_INPAINT) {
     return visibleControls.filter((control) => !INPAINT_HIDDEN_CONTROL_IDS.has(control.id))
   }
   return visibleControls.filter((control) => !OUTPAINT_HIDDEN_CONTROL_IDS.has(control.id))
 }
 
-function isControlnetControlVisible(controlId: string): boolean {
-  return CONTROLNET_GUIDE_UI_ENABLED || !CONTROLNET_HIDDEN_CONTROL_IDS.has(controlId)
+function isControlnetControlVisible(
+  controlId: string,
+  generationMode?: GenerationMode,
+): boolean {
+  if (CONTROLNET_GUIDE_UI_ENABLED) {
+    return true
+  }
+  if (
+    generationMode === GENERATION_MODE_INPAINT &&
+    INPAINT_CONTROLNET_CONTROL_IDS.has(controlId)
+  ) {
+    return true
+  }
+  return !CONTROLNET_HIDDEN_CONTROL_IDS.has(controlId)
 }
 
 /**

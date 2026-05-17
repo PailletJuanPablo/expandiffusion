@@ -73,7 +73,7 @@ describe('controlSchemas', () => {
       .toEqual(['prompt', 'mask_blur', 'outpaint_max_width'])
   })
 
-  it('hides ControlNet controls while the guide UI is disabled', () => {
+  it('hides ControlNet controls outside inpaint while the guide UI is disabled', () => {
     const controls = [
       control('prompt', CONTROL_SECTION_BASIC),
       control('controlnet_model_id', CONTROL_SECTION_ADVANCED),
@@ -85,6 +85,63 @@ describe('controlSchemas', () => {
     expect(controlsForSection(controls, CONTROL_SECTION_ADVANCED)).toEqual([])
     expect(controlsForGenerationMode(controls, GENERATION_MODE_OUTPAINT).map((item) => item.id))
       .toEqual(['prompt'])
+  })
+
+  it('shows ControlNet strength and timing controls for inpaint', () => {
+    const controls = [
+      control('prompt', CONTROL_SECTION_BASIC),
+      control('controlnet_model_id', CONTROL_SECTION_ADVANCED),
+      control('controlnet_conditioning_scale', CONTROL_SECTION_ADVANCED),
+      control('control_guidance_start', CONTROL_SECTION_ADVANCED),
+      control('control_guidance_end', CONTROL_SECTION_ADVANCED),
+    ]
+
+    const inpaintControls = controlsForGenerationMode(controls, GENERATION_MODE_INPAINT)
+
+    expect(inpaintControls.map((item) => item.id)).toEqual([
+      'prompt',
+      'controlnet_conditioning_scale',
+      'control_guidance_start',
+      'control_guidance_end',
+    ])
+    expect(
+      controlsForSection(inpaintControls, CONTROL_SECTION_ADVANCED, {
+        generationMode: GENERATION_MODE_INPAINT,
+      }).map((item) => item.id),
+    ).toEqual([
+      'controlnet_conditioning_scale',
+      'control_guidance_start',
+      'control_guidance_end',
+    ])
+  })
+
+  it('keeps common inpaint controls visible in inpaint mode', () => {
+    const controls = [
+      control('prompt', CONTROL_SECTION_BASIC),
+      control('negative_prompt', CONTROL_SECTION_BASIC),
+      control('inpaint_strength', CONTROL_SECTION_BASIC),
+      control('inpaint_area', CONTROL_SECTION_ADVANCED),
+      control('mask_crop_padding', CONTROL_SECTION_ADVANCED),
+      control('fill_mode', CONTROL_SECTION_ADVANCED),
+      control('result_mode', CONTROL_SECTION_ADVANCED),
+      control('conditioning_type', CONTROL_SECTION_ADVANCED),
+      control('img2img', CONTROL_SECTION_ADVANCED),
+      control('outpaint_direction', CONTROL_SECTION_BASIC),
+      control('hf_space_overlap_percentage', CONTROL_SECTION_BASIC),
+    ]
+
+    expect(controlsForGenerationMode(controls, GENERATION_MODE_INPAINT).map((item) => item.id))
+      .toEqual([
+        'prompt',
+        'negative_prompt',
+        'inpaint_strength',
+        'inpaint_area',
+        'mask_crop_padding',
+        'fill_mode',
+        'result_mode',
+        'conditioning_type',
+        'img2img',
+      ])
   })
 })
 

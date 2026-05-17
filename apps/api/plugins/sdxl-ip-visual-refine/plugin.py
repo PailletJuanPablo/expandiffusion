@@ -13,7 +13,10 @@ from PIL import Image, ImageChops, ImageFilter
 
 from expandiffusion import constants
 from expandiffusion.adapters.base import GenerationContext
-from expandiffusion.adapters.diffusers_inpaint import SdxlFillControlNetUnionAdapter
+from expandiffusion.adapters.diffusers_inpaint import (
+    SdxlFillControlNetUnionAdapter,
+    _repaint_control_image,
+)
 from expandiffusion.errors import AppError, GenerationCancelled
 from expandiffusion.schemas import AdapterCapabilities, ControlOption, ControlSchema
 
@@ -25,6 +28,9 @@ PARAM_IP_SCALE = "ip_adapter_scale"
 PARAM_STEPS = "visual_refine_steps"
 PARAM_REFERENCE = "visual_refine_reference"
 PARAM_INPAINT_STRENGTH = "inpaint_strength"
+PARAM_CONTROL_GUIDANCE_START = "control_guidance_start"
+PARAM_CONTROL_GUIDANCE_END = "control_guidance_end"
+PARAM_CONDITIONING_TYPE = "conditioning_type"
 
 REFERENCE_NEAR_EDGE = "near_edge"
 REFERENCE_VISIBLE_SOURCE = "visible_source"
@@ -73,6 +79,7 @@ class SdxlFillIpRefineAdapter(SdxlFillControlNetUnionAdapter):
 
     def generation_controls(self) -> list[ControlSchema]:
         controls = super().generation_controls()
+        controls.extend(_missing_controls(controls, _common_inpaint_controls()))
         controls.extend(
             [
                 ControlSchema(
@@ -89,6 +96,26 @@ class SdxlFillIpRefineAdapter(SdxlFillControlNetUnionAdapter):
                     section=constants.CONTROL_SECTION_BASIC,
                     default_value=DEFAULT_INPAINT_STRENGTH,
                     min=0.05,
+                    max=1.0,
+                    step=0.01,
+                ),
+                ControlSchema(
+                    id=PARAM_CONTROL_GUIDANCE_START,
+                    label="Control start",
+                    kind=constants.CONTROL_SLIDER,
+                    section=constants.CONTROL_SECTION_ADVANCED,
+                    default_value=constants.DEFAULT_CONTROL_GUIDANCE_START,
+                    min=0.0,
+                    max=1.0,
+                    step=0.01,
+                ),
+                ControlSchema(
+                    id=PARAM_CONTROL_GUIDANCE_END,
+                    label="Control end",
+                    kind=constants.CONTROL_SLIDER,
+                    section=constants.CONTROL_SECTION_ADVANCED,
+                    default_value=constants.DEFAULT_CONTROL_GUIDANCE_END,
+                    min=0.0,
                     max=1.0,
                     step=0.01,
                 ),
@@ -141,12 +168,19 @@ class SdxlFillIpRefineAdapter(SdxlFillControlNetUnionAdapter):
         defaults = super().generation_defaults()
         defaults.update(
             {
+                "negative_prompt": "",
+                "inpaint_area": constants.INPAINT_AREA_WHOLE_SELECTION,
+                "mask_crop_padding": constants.DEFAULT_MASK_CROP_PADDING,
+                "img2img": False,
+                PARAM_CONDITIONING_TYPE: constants.CONDITIONING_TYPE_COLOR,
                 PARAM_ENABLED: DEFAULT_ENABLED,
                 PARAM_STRENGTH: DEFAULT_STRENGTH,
                 PARAM_IP_SCALE: DEFAULT_IP_SCALE,
                 PARAM_STEPS: DEFAULT_STEPS,
                 PARAM_REFERENCE: DEFAULT_REFERENCE,
                 PARAM_INPAINT_STRENGTH: DEFAULT_INPAINT_STRENGTH,
+                PARAM_CONTROL_GUIDANCE_START: constants.DEFAULT_CONTROL_GUIDANCE_START,
+                PARAM_CONTROL_GUIDANCE_END: constants.DEFAULT_CONTROL_GUIDANCE_END,
             }
         )
         return defaults
@@ -197,9 +231,11 @@ class SdxlFillIpRefineAdapter(SdxlFillControlNetUnionAdapter):
             process_size = _multiple_of_eight_size(source.size)
             process_source = _pad_to_size(source, process_size, edge=True)
             process_mask = _pad_to_size(mask, process_size, edge=False)
+            process_control = _repaint_control_image(process_source, process_mask)
             strength = _inpaint_strength(context)
             _save_image(context.metadata, "conservative_inpaint_source.png", source)
             _save_image(context.metadata, "conservative_inpaint_mask.png", mask)
+            _save_image(context.metadata, "conservative_inpaint_control.png", process_control)
             _save_json(
                 context.metadata,
                 "conservative_inpaint_inputs.json",
@@ -209,14 +245,27 @@ class SdxlFillIpRefineAdapter(SdxlFillControlNetUnionAdapter):
                     "strength": strength,
                     "steps": context.parameters.steps,
                     "guidance_scale": context.parameters.guidance_scale,
+                    "control_mode": 7,
+                    "controlnet_conditioning_scale": (
+                        context.parameters.controlnet_conditioning_scale
+                    ),
+                    "control_guidance_start": context.parameters.control_guidance_start,
+                    "control_guidance_end": context.parameters.control_guidance_end,
+                    "negative_prompt": context.parameters.negative_prompt,
+                    "inpaint_area": context.parameters.inpaint_area,
+                    "mask_crop_padding": context.parameters.mask_crop_padding,
+                    "fill_mode": context.parameters.fill_mode,
+                    "result_mode": context.parameters.result_mode,
+                    "conditioning_type": context.parameters.conditioning_type,
+                    "img2img": context.parameters.img2img,
                     "sample_count": context.parameters.sample_count,
                     "seed": context.parameters.seed,
                     "random_seed": context.parameters.random_seed,
                 },
             )
 
-            context.progress(0.01, "Loading SDXL inpaint")
-            pipeline = self._build_refine_pipeline()
+            context.progress(0.01, "Loading SDXL ControlNet Union inpaint")
+            pipeline = self._build_inpaint_pipeline()
             images: list[Image.Image] = []
             sample_count = max(1, context.parameters.sample_count)
             total_steps = max(1, context.parameters.steps)
@@ -249,9 +298,22 @@ class SdxlFillIpRefineAdapter(SdxlFillControlNetUnionAdapter):
                     prompt=_refine_prompt(context.parameters.prompt),
                     image=process_source,
                     mask_image=process_mask,
+                    control_image=process_control,
+                    control_mode=7,
+                    controlnet_conditioning_scale=(
+                        context.parameters.controlnet_conditioning_scale
+                    ),
+                    control_guidance_start=context.parameters.control_guidance_start,
+                    control_guidance_end=context.parameters.control_guidance_end,
                     width=process_size[0],
                     height=process_size[1],
                     strength=strength,
+                    negative_prompt=context.parameters.negative_prompt or None,
+                    padding_mask_crop=(
+                        context.parameters.mask_crop_padding
+                        if context.parameters.inpaint_area == constants.INPAINT_AREA_ONLY_MASKED
+                        else None
+                    ),
                     num_inference_steps=context.parameters.steps,
                     guidance_scale=context.parameters.guidance_scale,
                     num_images_per_prompt=1,
@@ -426,6 +488,35 @@ class SdxlFillIpRefineAdapter(SdxlFillControlNetUnionAdapter):
             add_watermarker=False,
         ).to(self.device)
 
+    def _build_inpaint_pipeline(self) -> Any:
+        if self.pipeline is None:
+            raise AppError(
+                constants.ERROR_MODEL_NOT_LOADED,
+                "Load the model before starting SDXL ControlNet Union inpaint.",
+                status_code=409,
+            )
+        try:
+            from diffusers import StableDiffusionXLControlNetUnionInpaintPipeline
+        except ImportError as exc:
+            raise AppError(
+                constants.ERROR_GENERATION_FAILED,
+                "Diffusers ControlNet Union inpaint support is required.",
+                status_code=500,
+            ) from exc
+
+        scheduler = self.pipeline.scheduler.__class__.from_config(self.pipeline.scheduler.config)
+        return StableDiffusionXLControlNetUnionInpaintPipeline(
+            vae=self.pipeline.vae,
+            text_encoder=self.pipeline.text_encoder,
+            text_encoder_2=self.pipeline.text_encoder_2,
+            tokenizer=self.pipeline.tokenizer,
+            tokenizer_2=self.pipeline.tokenizer_2,
+            unet=self.pipeline.unet,
+            controlnet=_controlnet_union_for_inpaint(self.pipeline.controlnet),
+            scheduler=scheduler,
+            add_watermarker=False,
+        ).to(self.device)
+
 
 def _settings_from_context(context: GenerationContext) -> VisualRefineSettings:
     return VisualRefineSettings(
@@ -440,6 +531,186 @@ def _settings_from_context(context: GenerationContext) -> VisualRefineSettings:
             {REFERENCE_NEAR_EDGE, REFERENCE_VISIBLE_SOURCE},
         ),
     )
+
+
+def _missing_controls(
+    existing_controls: list[ControlSchema],
+    candidate_controls: list[ControlSchema],
+) -> list[ControlSchema]:
+    existing_ids = {control.id for control in existing_controls}
+    return [control for control in candidate_controls if control.id not in existing_ids]
+
+
+def _common_inpaint_controls() -> list[ControlSchema]:
+    return [
+        ControlSchema(
+            id="negative_prompt",
+            label="Negative prompt",
+            kind=constants.CONTROL_TEXTAREA,
+            section=constants.CONTROL_SECTION_BASIC,
+            rows=2,
+        ),
+        ControlSchema(
+            id="fill_mode",
+            label="Fill preprocessor",
+            kind=constants.CONTROL_SELECT,
+            section=constants.CONTROL_SECTION_ADVANCED,
+            default_value=constants.FILL_TRANSPARENT,
+            options=[
+                ControlOption(id=constants.FILL_PATCHMATCH, label="patchmatch"),
+                ControlOption(id=constants.FILL_EDGE_EXTEND, label="edge_pad"),
+                ControlOption(id=constants.FILL_OPENCV_NS, label="cv2_ns"),
+                ControlOption(id=constants.FILL_OPENCV_TELEA, label="cv2_telea"),
+                ControlOption(id=constants.FILL_PERLIN_NOISE, label="perlin"),
+                ControlOption(id=constants.FILL_GAUSSIAN_NOISE, label="gaussian"),
+                ControlOption(id=constants.FILL_TRANSPARENT, label="transparent"),
+            ],
+        ),
+        ControlSchema(
+            id="inpaint_area",
+            label="Inpaint area",
+            kind=constants.CONTROL_SELECT,
+            section=constants.CONTROL_SECTION_ADVANCED,
+            default_value=constants.INPAINT_AREA_WHOLE_SELECTION,
+            options=[
+                ControlOption(id=constants.INPAINT_AREA_WHOLE_SELECTION, label="whole selection"),
+                ControlOption(id=constants.INPAINT_AREA_ONLY_MASKED, label="only masked crop"),
+            ],
+        ),
+        ControlSchema(
+            id="mask_crop_padding",
+            label="Mask padding",
+            kind=constants.CONTROL_NUMBER,
+            section=constants.CONTROL_SECTION_ADVANCED,
+            default_value=constants.DEFAULT_MASK_CROP_PADDING,
+            min=0,
+            max=512,
+            step=1,
+        ),
+        ControlSchema(
+            id="result_mode",
+            label="Result mode",
+            kind=constants.CONTROL_SELECT,
+            section=constants.CONTROL_SECTION_ADVANCED,
+            default_value=constants.RESULT_MODE_PRESERVE_KNOWN,
+            options=[
+                ControlOption(
+                    id=constants.RESULT_MODE_GENERATED_SELECTION,
+                    label="generated selection",
+                ),
+                ControlOption(id=constants.RESULT_MODE_PRESERVE_KNOWN, label="preserve known"),
+                ControlOption(id=constants.RESULT_MODE_FEATHER_KNOWN, label="feather known"),
+                ControlOption(
+                    id=constants.RESULT_MODE_RESTORE_ORIGINAL_SOFT,
+                    label="restore original soft",
+                ),
+            ],
+        ),
+        ControlSchema(
+            id=PARAM_CONDITIONING_TYPE,
+            label="Conditioning type",
+            kind=constants.CONTROL_SELECT,
+            section=constants.CONTROL_SECTION_ADVANCED,
+            default_value=constants.CONDITIONING_TYPE_COLOR,
+            options=[
+                ControlOption(id=constants.CONDITIONING_TYPE_COLOR, label="color"),
+                ControlOption(id=constants.CONDITIONING_TYPE_SCRIBBLE, label="scribble"),
+            ],
+        ),
+        ControlSchema(
+            id="img2img",
+            label="Img2img",
+            kind=constants.CONTROL_SWITCH,
+            section=constants.CONTROL_SECTION_ADVANCED,
+            default_value=False,
+        ),
+    ]
+
+
+def _controlnet_union_for_inpaint(controlnet: Any) -> Any:
+    try:
+        import torch
+        from diffusers.models.controlnets.controlnet_union import ControlNetUnionModel
+    except ImportError as exc:
+        raise AppError(
+            constants.ERROR_GENERATION_FAILED,
+            "Diffusers ControlNet Union support is required.",
+            status_code=500,
+        ) from exc
+
+    if isinstance(controlnet, ControlNetUnionModel):
+        return controlnet
+
+    class ControlNetUnionInpaintShim(ControlNetUnionModel):
+        def __init__(self, wrapped_controlnet: Any) -> None:
+            torch.nn.Module.__init__(self)
+            self._internal_dict = wrapped_controlnet.config
+            self.wrapped_controlnet = wrapped_controlnet
+
+        def forward(
+            self,
+            sample: Any,
+            timestep: Any,
+            encoder_hidden_states: Any,
+            controlnet_cond: Any,
+            control_type: Any,
+            control_type_idx: Any,
+            conditioning_scale: float | list[float] = 1.0,
+            class_labels: Any | None = None,
+            timestep_cond: Any | None = None,
+            attention_mask: Any | None = None,
+            added_cond_kwargs: dict[str, Any] | None = None,
+            cross_attention_kwargs: dict[str, Any] | None = None,
+            from_multi: bool = False,
+            guess_mode: bool = False,
+            return_dict: bool = True,
+        ) -> Any:
+            controlnet_added_cond_kwargs = dict(added_cond_kwargs or {})
+            controlnet_added_cond_kwargs["control_type"] = control_type
+            return self.wrapped_controlnet(
+                sample,
+                timestep,
+                encoder_hidden_states=encoder_hidden_states,
+                controlnet_cond_list=_expanded_controlnet_union_conditions(
+                    controlnet_cond,
+                    control_type_idx,
+                    int(control_type.shape[-1]),
+                ),
+                conditioning_scale=_single_controlnet_conditioning_scale(conditioning_scale),
+                class_labels=class_labels,
+                timestep_cond=timestep_cond,
+                attention_mask=attention_mask,
+                added_cond_kwargs=controlnet_added_cond_kwargs,
+                cross_attention_kwargs=cross_attention_kwargs,
+                guess_mode=guess_mode,
+                return_dict=return_dict,
+            )
+
+    return ControlNetUnionInpaintShim(controlnet)
+
+
+def _single_controlnet_conditioning_scale(conditioning_scale: Any) -> Any:
+    if isinstance(conditioning_scale, list) and len(conditioning_scale) == 1:
+        return conditioning_scale[0]
+    return conditioning_scale
+
+
+def _expanded_controlnet_union_conditions(
+    conditions: Any,
+    control_type_idx: Any,
+    control_type_count: int,
+) -> list[Any]:
+    condition_items = conditions if isinstance(conditions, list) else [conditions]
+    mode_items = control_type_idx if isinstance(control_type_idx, list) else [control_type_idx]
+    if mode_items and isinstance(mode_items[0], list):
+        mode_items = mode_items[0]
+    if not condition_items:
+        return []
+    template = condition_items[0]
+    expanded = [template.new_zeros(template.shape) for _ in range(control_type_count)]
+    for index, mode in enumerate(mode_items):
+        expanded[int(mode)] = condition_items[min(index, len(condition_items) - 1)]
+    return expanded
 
 
 def _parameter(context: GenerationContext, key: str, default: Any) -> Any:

@@ -65,8 +65,12 @@ export function GenerationControls({
     ),
     generationMode,
   )
-  const basicControls = controlsForSection(adapterControls, CONTROL_SECTION_BASIC)
-  const advancedControls = controlsForSection(adapterControls, CONTROL_SECTION_ADVANCED)
+  const basicControls = controlsForSection(adapterControls, CONTROL_SECTION_BASIC, {
+    generationMode,
+  })
+  const advancedControls = controlsForSection(adapterControls, CONTROL_SECTION_ADVANCED, {
+    generationMode,
+  })
   const extensionControls = controlsForSection(loadControls, CONTROL_SECTION_EXTENSIONS)
     .filter((control) => control.id !== 'loras')
   const toggleSection = (section: keyof typeof openSections) => {

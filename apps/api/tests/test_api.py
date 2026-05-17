@@ -1900,11 +1900,29 @@ def test_sdxl_ip_visual_refine_controls_do_not_touch_base_adapter() -> None:
     assert "visual_refine_enabled" not in base_controls
     assert "visual_refine_enabled" not in base_defaults
     assert "visual_refine_enabled" in refine_controls
+    assert "negative_prompt" in refine_controls
     assert "inpaint_strength" in refine_controls
+    assert "inpaint_area" in refine_controls
+    assert "mask_crop_padding" in refine_controls
+    assert "fill_mode" in refine_controls
+    assert "result_mode" in refine_controls
+    assert "conditioning_type" in refine_controls
+    assert "img2img" in refine_controls
+    assert "control_guidance_start" in refine_controls
+    assert "control_guidance_end" in refine_controls
     assert refine_defaults["visual_refine_enabled"] is False
     assert refine_defaults["visual_refine_strength"] == 0.45
     assert refine_defaults["ip_adapter_scale"] == 0.45
+    assert refine_defaults["negative_prompt"] == ""
     assert refine_defaults["inpaint_strength"] == 0.65
+    assert refine_defaults["inpaint_area"] == constants.INPAINT_AREA_WHOLE_SELECTION
+    assert refine_defaults["mask_crop_padding"] == constants.DEFAULT_MASK_CROP_PADDING
+    assert refine_defaults["fill_mode"] == constants.FILL_TRANSPARENT
+    assert refine_defaults["result_mode"] == constants.RESULT_MODE_PRESERVE_KNOWN
+    assert refine_defaults["conditioning_type"] == constants.CONDITIONING_TYPE_COLOR
+    assert refine_defaults["img2img"] is False
+    assert refine_defaults["control_guidance_start"] == constants.DEFAULT_CONTROL_GUIDANCE_START
+    assert refine_defaults["control_guidance_end"] == constants.DEFAULT_CONTROL_GUIDANCE_END
 
 
 def test_sdxl_ip_visual_refine_can_skip_refine(monkeypatch) -> None:
@@ -1970,6 +1988,15 @@ def test_sdxl_ip_visual_refine_inpaint_uses_conservative_masked_branch(
         def __call__(self, **kwargs):
             records["image"] = kwargs["image"].copy()
             records["mask"] = kwargs["mask_image"].copy()
+            records["control_image"] = kwargs["control_image"].copy()
+            records["control_mode"] = kwargs["control_mode"]
+            records["controlnet_conditioning_scale"] = kwargs[
+                "controlnet_conditioning_scale"
+            ]
+            records["control_guidance_start"] = kwargs["control_guidance_start"]
+            records["control_guidance_end"] = kwargs["control_guidance_end"]
+            records["negative_prompt"] = kwargs["negative_prompt"]
+            records["padding_mask_crop"] = kwargs.get("padding_mask_crop")
             records["strength"] = kwargs["strength"]
             records["steps"] = kwargs["num_inference_steps"]
             records["guidance_scale"] = kwargs["guidance_scale"]
@@ -1977,7 +2004,7 @@ def test_sdxl_ip_visual_refine_inpaint_uses_conservative_masked_branch(
             return type("Output", (), {"images": [Image.new("RGB", (96, 64), (8, 9, 10))]})()
 
     monkeypatch.setattr(SdxlFillControlNetUnionAdapter, "generate", fake_base_generate)
-    monkeypatch.setattr(adapter, "_build_refine_pipeline", lambda: FakeInpaintPipeline())
+    monkeypatch.setattr(adapter, "_build_inpaint_pipeline", lambda: FakeInpaintPipeline())
     context = GenerationContext(
         source=source,
         mask=_half_generation_mask(96, 64, 48),
@@ -1987,6 +2014,12 @@ def test_sdxl_ip_visual_refine_inpaint_uses_conservative_masked_branch(
             guidance_scale=1.5,
             strength=1.0,
             inpaint_strength=0.42,
+            negative_prompt="bad lighting",
+            inpaint_area=constants.INPAINT_AREA_ONLY_MASKED,
+            mask_crop_padding=64,
+            controlnet_conditioning_scale=0.83,
+            control_guidance_start=0.1,
+            control_guidance_end=0.9,
             random_seed=False,
             seed=10,
             sample_count=1,
@@ -2003,9 +2036,80 @@ def test_sdxl_ip_visual_refine_inpaint_uses_conservative_masked_branch(
     assert records["image"].getpixel((80, 32)) == (210, 120, 80)
     assert records["mask"].getpixel((0, 0)) == 0
     assert records["mask"].getpixel((95, 0)) == 255
+    assert records["control_image"].getpixel((0, 0)) == (20, 30, 40)
+    assert records["control_image"].getpixel((80, 32)) == (0, 0, 0)
+    assert records["control_mode"] == 7
+    assert records["controlnet_conditioning_scale"] == 0.83
+    assert records["control_guidance_start"] == 0.1
+    assert records["control_guidance_end"] == 0.9
+    assert records["negative_prompt"] == "bad lighting"
+    assert records["padding_mask_crop"] == 64
     assert records["strength"] == 0.42
     assert records["steps"] == 7
     assert records["guidance_scale"] == 1.5
+
+
+def test_sdxl_ip_visual_refine_controlnet_union_shim_maps_repaint_mode() -> None:
+    import torch
+    from diffusers.configuration_utils import FrozenDict
+
+    registry = AdapterRegistry()
+    postprocessors = GenerationPostprocessorRegistry()
+    load_local_plugins(registry, constants.DEFAULT_PLUGIN_DIR, postprocessors)
+    adapter = registry.get("sdxl-fill-ip-refine")
+    plugin_module = sys.modules[adapter.__class__.__module__]
+    records = {}
+
+    class WrappedControlNet(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.config = FrozenDict({"num_control_type": 8})
+            self.weight = torch.nn.Parameter(torch.ones(()))
+
+        def forward(
+            self,
+            _sample,
+            _timestep,
+            *,
+            encoder_hidden_states,
+            controlnet_cond_list,
+            conditioning_scale,
+            added_cond_kwargs,
+            return_dict,
+            **_kwargs,
+        ):
+            records["encoder_hidden_states"] = encoder_hidden_states
+            records["controlnet_cond_list"] = controlnet_cond_list
+            records["conditioning_scale"] = (torch.ones(()) * conditioning_scale).item()
+            records["control_type"] = added_cond_kwargs["control_type"]
+            records["return_dict"] = return_dict
+            return "down", "mid"
+
+    wrapped = WrappedControlNet()
+    shim = plugin_module._controlnet_union_for_inpaint(wrapped)
+    condition = torch.ones((1, 3, 8, 8))
+    control_type = torch.zeros((2, 8))
+    control_type[:, 7] = 1
+    result = shim(
+        torch.zeros((2, 4, 8, 8)),
+        torch.tensor(1),
+        encoder_hidden_states=torch.zeros((2, 1, 4)),
+        controlnet_cond=[condition],
+        control_type=control_type,
+        control_type_idx=[7],
+        conditioning_scale=[0.83],
+        added_cond_kwargs={"text_embeds": torch.zeros((2, 4))},
+        return_dict=False,
+    )
+
+    assert result == ("down", "mid")
+    assert shim.wrapped_controlnet is wrapped
+    assert len(records["controlnet_cond_list"]) == 8
+    assert records["controlnet_cond_list"][0].sum().item() == 0
+    assert torch.equal(records["controlnet_cond_list"][7], condition)
+    assert records["conditioning_scale"] == pytest.approx(0.83)
+    assert records["control_type"] is control_type
+    assert records["return_dict"] is False
 
 
 def test_sdxl_ip_visual_refine_uses_generation_mask_and_near_edge_reference(
