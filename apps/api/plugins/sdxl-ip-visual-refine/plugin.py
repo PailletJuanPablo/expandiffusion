@@ -24,6 +24,7 @@ PARAM_STRENGTH = "visual_refine_strength"
 PARAM_IP_SCALE = "ip_adapter_scale"
 PARAM_STEPS = "visual_refine_steps"
 PARAM_REFERENCE = "visual_refine_reference"
+PARAM_INPAINT_STRENGTH = "inpaint_strength"
 
 REFERENCE_NEAR_EDGE = "near_edge"
 REFERENCE_VISIBLE_SOURCE = "visible_source"
@@ -38,6 +39,7 @@ DEFAULT_STRENGTH = 0.45
 DEFAULT_IP_SCALE = 0.45
 DEFAULT_STEPS = 12
 DEFAULT_REFERENCE = REFERENCE_NEAR_EDGE
+DEFAULT_INPAINT_STRENGTH = 0.65
 
 
 @dataclass(slots=True)
@@ -79,6 +81,16 @@ class SdxlFillIpRefineAdapter(SdxlFillControlNetUnionAdapter):
                     kind=constants.CONTROL_SWITCH,
                     section=constants.CONTROL_SECTION_ADVANCED,
                     default_value=DEFAULT_ENABLED,
+                ),
+                ControlSchema(
+                    id=PARAM_INPAINT_STRENGTH,
+                    label="Inpaint strength",
+                    kind=constants.CONTROL_SLIDER,
+                    section=constants.CONTROL_SECTION_BASIC,
+                    default_value=DEFAULT_INPAINT_STRENGTH,
+                    min=0.05,
+                    max=1.0,
+                    step=0.01,
                 ),
                 ControlSchema(
                     id=PARAM_STRENGTH,
@@ -134,11 +146,15 @@ class SdxlFillIpRefineAdapter(SdxlFillControlNetUnionAdapter):
                 PARAM_IP_SCALE: DEFAULT_IP_SCALE,
                 PARAM_STEPS: DEFAULT_STEPS,
                 PARAM_REFERENCE: DEFAULT_REFERENCE,
+                PARAM_INPAINT_STRENGTH: DEFAULT_INPAINT_STRENGTH,
             }
         )
         return defaults
 
     def generate(self, context: GenerationContext) -> list[Image.Image]:
+        if context.metadata.get("generation_mode") == constants.GENERATION_MODE_INPAINT:
+            return self._inpaint_images(context)
+
         settings = _settings_from_context(context)
         base_context = GenerationContext(
             source=context.source,
@@ -163,6 +179,113 @@ class SdxlFillIpRefineAdapter(SdxlFillControlNetUnionAdapter):
             return first_pass_images
 
         return self._refine_images(context, first_pass_images, settings)
+
+    def _inpaint_images(self, context: GenerationContext) -> list[Image.Image]:
+        try:
+            import torch
+        except ImportError as exc:
+            raise AppError(
+                constants.ERROR_GENERATION_FAILED,
+                "PyTorch is required for SDXL inpaint.",
+                status_code=500,
+            ) from exc
+
+        pipeline = None
+        try:
+            source = context.source.convert("RGB")
+            mask = _refine_mask(context.mask, source.size)
+            process_size = _multiple_of_eight_size(source.size)
+            process_source = _pad_to_size(source, process_size, edge=True)
+            process_mask = _pad_to_size(mask, process_size, edge=False)
+            strength = _inpaint_strength(context)
+            _save_image(context.metadata, "conservative_inpaint_source.png", source)
+            _save_image(context.metadata, "conservative_inpaint_mask.png", mask)
+            _save_json(
+                context.metadata,
+                "conservative_inpaint_inputs.json",
+                {
+                    "source_size": list(source.size),
+                    "process_size": list(process_size),
+                    "strength": strength,
+                    "steps": context.parameters.steps,
+                    "guidance_scale": context.parameters.guidance_scale,
+                    "sample_count": context.parameters.sample_count,
+                    "seed": context.parameters.seed,
+                    "random_seed": context.parameters.random_seed,
+                },
+            )
+
+            context.progress(0.01, "Loading SDXL inpaint")
+            pipeline = self._build_refine_pipeline()
+            images: list[Image.Image] = []
+            sample_count = max(1, context.parameters.sample_count)
+            total_steps = max(1, context.parameters.steps)
+            for index in range(sample_count):
+                if context.is_cancelled():
+                    raise GenerationCancelled()
+                generator = torch.Generator(device=self.device)
+                if not context.parameters.random_seed and context.parameters.seed is not None:
+                    generator.manual_seed(context.parameters.seed + index)
+                elif context.parameters.random_seed:
+                    generator.manual_seed(random.randint(0, 2**31 - 1))
+
+                def callback_on_step_end(
+                    _pipeline: Any,
+                    step: int,
+                    _timestep: Any,
+                    callback_kwargs: dict[str, Any],
+                    _index: int = index,
+                    _sample_count: int = sample_count,
+                    _total_steps: int = total_steps,
+                ) -> dict[str, Any]:
+                    if context.is_cancelled():
+                        raise GenerationCancelled()
+                    completed = _index * _total_steps + step + 1
+                    total = max(1, _sample_count * _total_steps)
+                    context.progress(min(0.98, completed / total), "SDXL inpaint")
+                    return callback_kwargs
+
+                output = pipeline(
+                    prompt=_refine_prompt(context.parameters.prompt),
+                    image=process_source,
+                    mask_image=process_mask,
+                    width=process_size[0],
+                    height=process_size[1],
+                    strength=strength,
+                    num_inference_steps=context.parameters.steps,
+                    guidance_scale=context.parameters.guidance_scale,
+                    num_images_per_prompt=1,
+                    generator=generator,
+                    callback_on_step_end=callback_on_step_end,
+                )
+                if not output.images:
+                    raise RuntimeError("SDXL inpaint produced no image.")
+                image = output.images[0].convert("RGB").crop((0, 0, *source.size))
+                _save_image(context.metadata, f"sample_{index:02d}_conservative_inpaint.png", image)
+                images.append(image)
+            context.progress(constants.PROGRESS_FINISHED, "Generation complete")
+            return images
+        except GenerationCancelled:
+            raise
+        except Exception as exc:
+            message = "SDXL inpaint failed."
+            if _is_oom(exc):
+                message = "SDXL inpaint ran out of CUDA memory."
+            raise AppError(
+                constants.ERROR_GENERATION_FAILED,
+                message,
+                status_code=500,
+                details={"stage": "conservative_inpaint", "reason": str(exc)},
+            ) from exc
+        finally:
+            if pipeline is not None:
+                del pipeline
+            gc.collect()
+            try:
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except Exception:
+                pass
 
     def _refine_images(
         self,
@@ -417,6 +540,41 @@ def _refine_prompt(prompt: str) -> str:
     if not prompt:
         return "continue the image, same style, same lighting, same color palette"
     return f"{prompt}, same style, same lighting, same color palette"
+
+
+def _inpaint_strength(context: GenerationContext) -> float:
+    return _float_parameter(context, PARAM_INPAINT_STRENGTH, DEFAULT_INPAINT_STRENGTH, 0.05, 1.0)
+
+
+def _multiple_of_eight_size(size: tuple[int, int]) -> tuple[int, int]:
+    width, height = size
+    return (_ceil_to_multiple(width, 8), _ceil_to_multiple(height, 8))
+
+
+def _ceil_to_multiple(value: int, multiple: int) -> int:
+    return ((value + multiple - 1) // multiple) * multiple
+
+
+def _pad_to_size(image: Image.Image, size: tuple[int, int], *, edge: bool) -> Image.Image:
+    if image.size == size:
+        return image
+    width, height = image.size
+    target_width, target_height = size
+    fill = 0 if image.mode == "L" else None
+    output = Image.new(image.mode, size, fill)
+    output.paste(image, (0, 0))
+    if edge and width > 0 and height > 0:
+        if target_width > width:
+            right_edge = image.crop((width - 1, 0, width, height)).resize(
+                (target_width - width, height)
+            )
+            output.paste(right_edge, (width, 0))
+        if target_height > height:
+            bottom_edge = output.crop((0, height - 1, target_width, height)).resize(
+                (target_width, target_height - height)
+            )
+            output.paste(bottom_edge, (0, height))
+    return output
 
 
 def _visual_refine_report(

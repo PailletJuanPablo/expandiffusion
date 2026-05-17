@@ -111,7 +111,7 @@ export const ONBOARDING_STEPS: OnboardingStepDefinition[] = [
     kicker: 'Warm up',
     title: 'Prepare the image engine',
     body: 'A model needs to be loaded before it can interpret prompts and pixels. Start with the recommended profile first; smaller models are faster, while larger families can take longer and use more VRAM.',
-    waitingBody: 'The first load can take a few minutes. Stay here and the guide will continue automatically as soon as the model is ready.',
+    waitingBody: 'The first load can take several minutes. The guide continues automatically when the model is ready.',
     primaryAction: ONBOARDING_ACTION_LOAD_MODEL,
     primaryLabel: 'Load model',
   },

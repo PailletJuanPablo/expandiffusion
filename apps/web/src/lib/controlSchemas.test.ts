@@ -62,6 +62,7 @@ describe('controlSchemas', () => {
   it('hides inpaint crop controls while in outpaint mode', () => {
     const controls = [
       control('prompt', CONTROL_SECTION_BASIC),
+      control('inpaint_strength', CONTROL_SECTION_BASIC),
       control('inpaint_area', CONTROL_SECTION_ADVANCED),
       control('mask_crop_padding', CONTROL_SECTION_ADVANCED),
       control('mask_blur', CONTROL_SECTION_ADVANCED),

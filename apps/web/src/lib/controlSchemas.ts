@@ -26,6 +26,7 @@ const INPAINT_HIDDEN_CONTROL_IDS = new Set([
 ])
 
 const OUTPAINT_HIDDEN_CONTROL_IDS = new Set([
+  'inpaint_strength',
   'inpaint_area',
   'mask_crop_padding',
 ])

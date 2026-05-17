@@ -1900,9 +1900,11 @@ def test_sdxl_ip_visual_refine_controls_do_not_touch_base_adapter() -> None:
     assert "visual_refine_enabled" not in base_controls
     assert "visual_refine_enabled" not in base_defaults
     assert "visual_refine_enabled" in refine_controls
+    assert "inpaint_strength" in refine_controls
     assert refine_defaults["visual_refine_enabled"] is False
     assert refine_defaults["visual_refine_strength"] == 0.45
     assert refine_defaults["ip_adapter_scale"] == 0.45
+    assert refine_defaults["inpaint_strength"] == 0.65
 
 
 def test_sdxl_ip_visual_refine_can_skip_refine(monkeypatch) -> None:
@@ -1944,6 +1946,66 @@ def test_sdxl_ip_visual_refine_can_skip_refine(monkeypatch) -> None:
         "source_size": (32, 16),
         "mask_size": (32, 16),
     }
+
+
+def test_sdxl_ip_visual_refine_inpaint_uses_conservative_masked_branch(
+    monkeypatch,
+) -> None:
+    registry = AdapterRegistry()
+    postprocessors = GenerationPostprocessorRegistry()
+    load_local_plugins(registry, constants.DEFAULT_PLUGIN_DIR, postprocessors)
+    adapter = registry.get("sdxl-fill-ip-refine")
+    adapter.device = "cpu"
+    source = Image.new("RGB", (96, 64), (20, 30, 40))
+    source.putpixel((80, 32), (210, 120, 80))
+    records = {}
+
+    def fake_base_generate(_adapter, _context):
+        raise AssertionError("inpaint must not use the fill/outpaint first pass")
+
+    class FakeInpaintPipeline:
+        def load_ip_adapter(self, *_args, **_kwargs):
+            raise AssertionError("conservative inpaint must not load IP-Adapter")
+
+        def __call__(self, **kwargs):
+            records["image"] = kwargs["image"].copy()
+            records["mask"] = kwargs["mask_image"].copy()
+            records["strength"] = kwargs["strength"]
+            records["steps"] = kwargs["num_inference_steps"]
+            records["guidance_scale"] = kwargs["guidance_scale"]
+            records["prompt"] = kwargs["prompt"]
+            return type("Output", (), {"images": [Image.new("RGB", (96, 64), (8, 9, 10))]})()
+
+    monkeypatch.setattr(SdxlFillControlNetUnionAdapter, "generate", fake_base_generate)
+    monkeypatch.setattr(adapter, "_build_refine_pipeline", lambda: FakeInpaintPipeline())
+    context = GenerationContext(
+        source=source,
+        mask=_half_generation_mask(96, 64, 48),
+        parameters=GenerationParameters(
+            prompt="repair object",
+            steps=7,
+            guidance_scale=1.5,
+            strength=1.0,
+            inpaint_strength=0.42,
+            random_seed=False,
+            seed=10,
+            sample_count=1,
+        ),
+        progress=lambda _value, _message: None,
+        is_cancelled=lambda: False,
+        metadata={"generation_mode": constants.GENERATION_MODE_INPAINT},
+    )
+
+    images = adapter.generate(context)
+
+    assert images[0].getpixel((0, 0)) == (8, 9, 10)
+    assert records["prompt"] == "repair object, same style, same lighting, same color palette"
+    assert records["image"].getpixel((80, 32)) == (210, 120, 80)
+    assert records["mask"].getpixel((0, 0)) == 0
+    assert records["mask"].getpixel((95, 0)) == 255
+    assert records["strength"] == 0.42
+    assert records["steps"] == 7
+    assert records["guidance_scale"] == 1.5
 
 
 def test_sdxl_ip_visual_refine_uses_generation_mask_and_near_edge_reference(

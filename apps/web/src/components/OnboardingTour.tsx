@@ -41,7 +41,7 @@ const POPOVER_WAITING_WIDTH = 420
 const POPOVER_GAP = 18
 const VIEWPORT_MARGIN = 18
 const POPOVER_ESTIMATED_HEIGHT = 280
-const POPOVER_WAITING_ESTIMATED_HEIGHT = 470
+const POPOVER_WAITING_ESTIMATED_HEIGHT = 548
 const MODEL_READY_ADVANCE_DELAY_MS = 900
 const IMAGE_READY_ADVANCE_DELAY_MS = 520
 const MODEL_LOADING_MESSAGE_INTERVAL_MS = 4200
@@ -444,6 +444,7 @@ function ModelLoadWaitPanel({
         <span>{percent}%</span>
       </div>
       <Progress value={percent} />
+      <ModelLoadingStages percent={percent} />
       {files || progress?.file_name || totalBytes ? (
         <div className="onboarding-load-details">
           {files ? <span>{t('onboarding.loading.files')}: {files}</span> : null}
@@ -456,7 +457,6 @@ function ModelLoadWaitPanel({
           {totalBytes ? <span>{t('onboarding.loading.totalDownload')}: {totalBytes}</span> : null}
         </div>
       ) : null}
-      <ModelLoadingStages percent={percent} />
       <ModelLoadingLessons />
     </div>
   )
@@ -724,7 +724,10 @@ function getPopoverStyle(targetRect: TourTargetRect | null, expanded = false): C
       : leftSideLeft >= VIEWPORT_MARGIN
         ? leftSideLeft
         : clamp(centeredLeft, VIEWPORT_MARGIN, viewportWidth - popoverWidth - VIEWPORT_MARGIN)
-  const estimatedHeight = expanded ? POPOVER_WAITING_ESTIMATED_HEIGHT : POPOVER_ESTIMATED_HEIGHT
+  const estimatedHeight = Math.min(
+    expanded ? POPOVER_WAITING_ESTIMATED_HEIGHT : POPOVER_ESTIMATED_HEIGHT,
+    viewportHeight - VIEWPORT_MARGIN * 2,
+  )
   const preferredTop = targetRect.top + targetRect.height / 2 - estimatedHeight / 2
   return {
     top: clamp(preferredTop, VIEWPORT_MARGIN, viewportHeight - estimatedHeight - VIEWPORT_MARGIN),

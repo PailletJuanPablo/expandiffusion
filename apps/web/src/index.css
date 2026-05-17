@@ -2396,6 +2396,7 @@ textarea:focus {
 
 .onboarding-popover {
   position: fixed;
+  box-sizing: border-box;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto auto;
   gap: 13px;
@@ -2546,6 +2547,7 @@ textarea:focus {
 
 .onboarding-stage-list {
   display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 6px;
   padding-top: 8px;
   border-top: 1px solid rgba(18, 184, 200, 0.16);
@@ -2553,6 +2555,7 @@ textarea:focus {
 
 .onboarding-stage-list-header {
   display: flex;
+  grid-column: 1 / -1;
   align-items: center;
   gap: 6px;
   color: var(--color-text-secondary);
@@ -2725,10 +2728,6 @@ textarea:focus {
     line-height: 1.18;
   }
 
-  .onboarding-load-summary {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
   .onboarding-actions {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2741,7 +2740,7 @@ textarea:focus {
 
 @media (max-height: 620px) {
   .onboarding-popover {
-    max-height: calc(100svh - 20px);
+    max-height: calc(100svh - 36px);
   }
 
   .onboarding-popover-main,
@@ -2749,8 +2748,12 @@ textarea:focus {
     gap: 8px;
   }
 
+  .onboarding-load-details {
+    display: none;
+  }
+
   .onboarding-lesson-block {
-    padding: 7px;
+    display: none;
   }
 }
 
